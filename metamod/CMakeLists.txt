@@ -19,7 +19,9 @@
 # Use -DCMAKE_BUILD_TYPE=COMPAT_GLIBC
 # to backward compatibility with oldest version of glibc 2.11
 #
-# Use -DBUILD_64BIT=ON to compile 64-bit version (default is 32-bit)
+# Use -DBUILD_64BIT=ON to compile 64-bit x86_64 version (default is 32-bit x86)
+# Use -DBUILD_AARCH64=ON to compile 64-bit AArch64 (ARM64) version
+# (auto-enabled when configuring on an aarch64 host)
 #
 #----------------------------------------
 
@@ -28,7 +30,14 @@ project(metamod CXX)
 
 option(DEBUG "Build with debug information." OFF)
 option(USE_STATIC_LIBSTDC "Enables static linking libstdc++." OFF)
-option(BUILD_64BIT "Build 64-bit version instead of 32-bit." OFF)
+option(BUILD_64BIT "Build 64-bit x86_64 version instead of 32-bit x86." OFF)
+option(BUILD_AARCH64 "Build for AArch64 (ARM64) target." OFF)
+
+# Auto-detect AArch64 host when neither toggle is specified explicitly.
+if (NOT BUILD_AARCH64 AND NOT BUILD_64BIT
+		AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+	set(BUILD_AARCH64 ON)
+endif()
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -37,14 +46,25 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_SHARED_LIBRARY_CXX_FLAGS "")
 set(CMAKE_SHARED_LIBRARY_LINK_CXX_FLAGS "")
 
-if (BUILD_64BIT)
+if (BUILD_AARCH64)
+	# Use the toolchain's native target arch; no -m32/-m64 selector applies.
+	set(ARCH_FLAG "")
+	set(METAMOD_OUTPUT_NAME "metamod_aarch64")
+	set(COMPAT_GLIBC_LIB_DIR "linuxaarch64")
+	set(METAMOD_ARCH_X86 OFF)
+	set(METAMOD_ARCH_AARCH64 ON)
+elseif (BUILD_64BIT)
 	set(ARCH_FLAG "-m64")
 	set(METAMOD_OUTPUT_NAME "metamod_amd64")
 	set(COMPAT_GLIBC_LIB_DIR "linux64")
+	set(METAMOD_ARCH_X86 ON)
+	set(METAMOD_ARCH_AARCH64 OFF)
 else()
 	set(ARCH_FLAG "-m32")
 	set(METAMOD_OUTPUT_NAME "metamod_i386")
 	set(COMPAT_GLIBC_LIB_DIR "linux32")
+	set(METAMOD_ARCH_X86 ON)
+	set(METAMOD_ARCH_AARCH64 OFF)
 endif()
 
 # Apply arch flag globally so the AsmJit submodule build matches.
@@ -58,7 +78,11 @@ set(COMPILE_FLAGS "${ARCH_FLAG} -U_FORTIFY_SOURCE")
 set(LINK_FLAGS "${ARCH_FLAG}")
 
 set(ASMJIT_STATIC ON CACHE BOOL "Build AsmJit as a static library" FORCE)
-set(ASMJIT_NO_AARCH64 ON CACHE BOOL "Disable AArch64 backend" FORCE)
+if (METAMOD_ARCH_AARCH64)
+	set(ASMJIT_NO_X86 ON CACHE BOOL "Disable X86 backend in AsmJit" FORCE)
+else()
+	set(ASMJIT_NO_AARCH64 ON CACHE BOOL "Disable AArch64 backend in AsmJit" FORCE)
+endif()
 # AsmJit links into a shared library, so its objects must be PIC.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 add_subdirectory(extern/asmjit EXCLUDE_FROM_ALL)
@@ -88,12 +112,18 @@ if ("$ENV{CXX}" MATCHES "icpc")
 		set(LINK_FLAGS "${LINK_FLAGS} -ipo -diag-disable=11003")
 	endif()
 else()
-	# Produce code optimized for the most common IA32/AMD64/EM64T processors.
-	# As new processors are deployed in the marketplace, the behavior of this option will change.
-	set(COMPILE_FLAGS "${COMPILE_FLAGS} \
-		-mtune=generic -msse3\
-		-fno-sized-deallocation -Wno-invalid-offsetof -Wno-ignored-attributes\
-		-Wno-write-strings -Wno-strict-aliasing -fno-plt")
+	if (METAMOD_ARCH_X86)
+		# Produce code optimized for the most common IA32/AMD64/EM64T processors.
+		# As new processors are deployed in the marketplace, the behavior of this option will change.
+		set(COMPILE_FLAGS "${COMPILE_FLAGS} \
+			-mtune=generic -msse3\
+			-fno-sized-deallocation -Wno-invalid-offsetof -Wno-ignored-attributes\
+			-Wno-write-strings -Wno-strict-aliasing -fno-plt")
+	else()
+		set(COMPILE_FLAGS "${COMPILE_FLAGS} \
+			-fno-sized-deallocation -Wno-invalid-offsetof -Wno-ignored-attributes\
+			-Wno-write-strings -Wno-strict-aliasing -fno-plt")
+	endif()
 
 	# Check Clang compiler
 	if (NOT "$ENV{CXX}" MATCHES "clang")
@@ -106,8 +136,8 @@ else()
 	endif()
 endif()
 
-# GCC >= 8.3
-if (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 8.0)
+# -fcf-protection is x86-only (control-flow protection / IBT/SHSTK).
+if (METAMOD_ARCH_X86 AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 8.0)
 	set(COMPILE_FLAGS "${COMPILE_FLAGS} -fcf-protection=none")
 endif()
 
@@ -170,6 +200,7 @@ target_compile_definitions(metamod PRIVATE
 target_sources(metamod PRIVATE
 	"src/api_info.cpp"
 	"src/callback_jit.cpp"
+	"src/callback_jit_orchestration.cpp"
 	"src/commands_meta.cpp"
 	"src/conf_meta.cpp"
 	"src/dllapi.cpp"
@@ -197,6 +228,12 @@ target_sources(metamod PRIVATE
 	"src/utils.cpp"
 	"src/glibc_compat.cpp"
 )
+
+if (METAMOD_ARCH_AARCH64)
+	target_sources(metamod PRIVATE "src/callback_jit_a64.cpp")
+else()
+	target_sources(metamod PRIVATE "src/callback_jit_x86.cpp")
+endif()
 
 target_link_libraries(metamod PRIVATE
 	dl
