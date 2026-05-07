@@ -38,8 +38,8 @@ public:
 
 	Reg new_gp_ptr() override	{ return m_cc->new_gp_ptr(); }
 	Reg new_gp32() override		{ return m_cc->new_gp32(); }
-	Reg new_vec_ss() override	{ return m_cc->new_xmm_ss(); }
-	Reg new_vec_sd() override	{ return m_cc->new_xmm_sd(); }
+	Reg new_vec_f32() override	{ return m_cc->new_xmm_ss(); }
+	Reg new_vec_f64() override	{ return m_cc->new_xmm_sd(); }
 
 	BaseMem new_stack(uint32_t size, uint32_t alignment) override
 	{
@@ -49,9 +49,11 @@ public:
 	{
 		return base.clone_adjusted(off);
 	}
-	BaseMem ptr(const Reg& base, int32_t off, uint32_t size) override
+	BaseMem ptr(const Reg& base, int32_t off) override
 	{
-		return x86::ptr(base.as<x86::Gp>(), off, size);
+		// Size left as-default; the load/store helper that consumes this
+		// BaseMem will clone_resized() to the right access width.
+		return x86::ptr(base.as<x86::Gp>(), off);
 	}
 
 	void mov_imm(const Reg& dst, uintptr_t val) override
@@ -97,9 +99,9 @@ public:
 		m_cc->pxor(v, v);
 	}
 
-	void lea(const Reg& dst, const BaseMem& mem) override
+	void lea_stack(const Reg& dst, const BaseMem& stack_mem) override
 	{
-		m_cc->lea(dst.as<x86::Gp>(), mem.as<x86::Mem>());
+		m_cc->lea(dst.as<x86::Gp>(), stack_mem.as<x86::Mem>());
 	}
 
 	void cmp_imm(const Reg& r, int32_t val) override

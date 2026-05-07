@@ -40,13 +40,15 @@ public:
 	// --- register allocation ---
 	virtual asmjit::Reg	new_gp_ptr() = 0;
 	virtual asmjit::Reg	new_gp32() = 0;
-	virtual asmjit::Reg	new_vec_ss() = 0;	// single-precision float
-	virtual asmjit::Reg	new_vec_sd() = 0;	// double-precision float
+	virtual asmjit::Reg	new_vec_f32() = 0;	// scalar single-precision float
+	virtual asmjit::Reg	new_vec_f64() = 0;	// scalar double-precision float
 
 	// --- stack / memory operands ---
 	virtual asmjit::BaseMem	new_stack(uint32_t size, uint32_t alignment) = 0;
 	virtual asmjit::BaseMem	stack_at(const asmjit::BaseMem& base, int32_t off) = 0;
-	virtual asmjit::BaseMem	ptr(const asmjit::Reg& base, int32_t off, uint32_t size) = 0;
+	// Memory operand at base+off; access size is set by the load/store helper
+	// that consumes this BaseMem, not here.
+	virtual asmjit::BaseMem	ptr(const asmjit::Reg& base, int32_t off) = 0;
 
 	// --- loads / stores ---
 	virtual void	mov_imm(const asmjit::Reg& dst, uintptr_t imm) = 0;
@@ -62,8 +64,11 @@ public:
 	virtual void	store_float(const asmjit::BaseMem& dst, const asmjit::Reg& src_vec) = 0;
 	virtual void	zero_vec(const asmjit::Reg& vec) = 0;
 
-	// --- address-of (lea-equivalent) ---
-	virtual void	lea(const asmjit::Reg& dst, const asmjit::BaseMem& mem) = 0;
+	// --- address-of for a stack-allocated mem (from new_stack / stack_at) ---
+	// On a64 this lowers to add dst, sp, #off after frame-layout finalize, so
+	// only stack-relative BaseMems are valid. General-mem lea would need a
+	// separate primitive.
+	virtual void	lea_stack(const asmjit::Reg& dst, const asmjit::BaseMem& stack_mem) = 0;
 
 	// --- compare + branch ---
 	virtual void	cmp_imm(const asmjit::Reg& r, int32_t imm) = 0;

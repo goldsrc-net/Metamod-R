@@ -51,8 +51,8 @@ FuncSignature engine_signature(const jitdata_t& jd)
 Reg new_arg_reg(IEmitter& em, argtype_t t)
 {
 	switch (t) {
-	case at_float:	return em.new_vec_ss();
-	case at_double:	return em.new_vec_sd();
+	case at_float:	return em.new_vec_f32();
+	case at_double:	return em.new_vec_f64();
 	default:	return em.new_gp_ptr();
 	}
 }
@@ -70,7 +70,7 @@ Reg capture_return(IEmitter& em, InvokeNode* inv, rettype_t rt)
 		return r;
 	}
 
-	Reg r = em.new_vec_ss();
+	Reg r = em.new_vec_f32();
 	inv->set_ret(0, r);
 	return r;
 }
@@ -84,7 +84,7 @@ void emit_passthrough_only(IEmitter& em, const jitdata_t& jd, const std::vector<
 			em.zero_gp(z);
 			em.ret_gp(z);
 		} else if (jd.rettype == rt_float) {
-			Reg z = em.new_vec_ss();
+			Reg z = em.new_vec_f32();
 			em.zero_vec(z);
 			em.ret_vec(z);
 		} else {
@@ -102,7 +102,7 @@ void emit_passthrough_only(IEmitter& em, const jitdata_t& jd, const std::vector<
 		inv->set_ret(0, r);
 		em.ret_gp(r);
 	} else if (jd.rettype == rt_float) {
-		Reg r = em.new_vec_ss();
+		Reg r = em.new_vec_f32();
 		inv->set_ret(0, r);
 		em.ret_vec(r);
 	} else {
@@ -115,10 +115,10 @@ void emit_status_update(IEmitter& em, const Reg& globals)
 {
 	Reg mres_reg = em.new_gp32();
 	Reg status_reg = em.new_gp32();
-	em.load_dword(mres_reg, em.ptr(globals, int32_t(offsetof(meta_globals_t, mres)), 4));
-	em.load_dword(status_reg, em.ptr(globals, int32_t(offsetof(meta_globals_t, status)), 4));
+	em.load_dword(mres_reg, em.ptr(globals, int32_t(offsetof(meta_globals_t, mres))));
+	em.load_dword(status_reg, em.ptr(globals, int32_t(offsetof(meta_globals_t, status))));
 	em.max_signed(status_reg, mres_reg);
-	em.store_dword(em.ptr(globals, int32_t(offsetof(meta_globals_t, status)), 4), status_reg);
+	em.store_dword(em.ptr(globals, int32_t(offsetof(meta_globals_t, status))), status_reg);
 }
 
 // if (mres >= MRES_OVERRIDE) over_ret = ret_reg
@@ -127,7 +127,7 @@ void emit_save_override(IEmitter& em, const Reg& globals, const BaseMem& over_re
 {
 	Reg mres_reg = em.new_gp32();
 	Label skip = em.new_label();
-	em.load_dword(mres_reg, em.ptr(globals, int32_t(offsetof(meta_globals_t, mres)), 4));
+	em.load_dword(mres_reg, em.ptr(globals, int32_t(offsetof(meta_globals_t, mres))));
 	em.cmp_imm(mres_reg, int32_t(MRES_OVERRIDE));
 	em.branch_below_unsigned(skip);
 
@@ -158,14 +158,14 @@ void emit_plugin_call(IEmitter& em, const jitdata_t& jd, const Reg& globals,
 	Reg slot_reg = em.new_gp_ptr();
 	em.mov_imm(slot_reg, handler_slot);
 	Reg handler_reg = em.new_gp_ptr();
-	em.load_word(handler_reg, em.ptr(slot_reg, 0, sizeof(uintptr_t)));
+	em.load_word(handler_reg, em.ptr(slot_reg, 0));
 	em.branch_if_zero(handler_reg, go_next);
 
 	// prev_mres = mres; mres = MRES_IGNORED
 	Reg old_mres = em.new_gp32();
-	em.load_dword(old_mres, em.ptr(globals, int32_t(offsetof(meta_globals_t, mres)), 4));
-	em.store_dword(em.ptr(globals, int32_t(offsetof(meta_globals_t, prev_mres)), 4), old_mres);
-	em.store_imm32(em.ptr(globals, int32_t(offsetof(meta_globals_t, mres)), 4), int32_t(MRES_IGNORED));
+	em.load_dword(old_mres, em.ptr(globals, int32_t(offsetof(meta_globals_t, mres))));
+	em.store_dword(em.ptr(globals, int32_t(offsetof(meta_globals_t, prev_mres))), old_mres);
+	em.store_imm32(em.ptr(globals, int32_t(offsetof(meta_globals_t, mres))), int32_t(MRES_IGNORED));
 
 	// Invoke handler, capture return.
 	InvokeNode* inv = em.invoke_reg(handler_reg, engine_signature(jd));
@@ -217,7 +217,7 @@ void emit_orchestration(IEmitter& em, const jitdata_t& jd,
 	// Backup g_metaGlobals into the local mg slot, intptr-sized words.
 	for (size_t off = 0; off < mg_size; off += sizeof(intptr_t)) {
 		Reg tmp = em.new_gp_ptr();
-		em.load_word(tmp, em.ptr(globals, int32_t(off), sizeof(intptr_t)));
+		em.load_word(tmp, em.ptr(globals, int32_t(off)));
 		em.store_word(em.stack_at(locals_base, int32_t(off)), tmp);
 	}
 
@@ -232,24 +232,24 @@ void emit_orchestration(IEmitter& em, const jitdata_t& jd,
 	}
 
 	// Initialize meta_globals fields for our own dispatch.
-	em.store_imm32(em.ptr(globals, int32_t(offsetof(meta_globals_t, mres)), 4), int32_t(MRES_UNSET));
-	em.store_imm32(em.ptr(globals, int32_t(offsetof(meta_globals_t, status)), 4), int32_t(MRES_UNSET));
+	em.store_imm32(em.ptr(globals, int32_t(offsetof(meta_globals_t, mres))), int32_t(MRES_UNSET));
+	em.store_imm32(em.ptr(globals, int32_t(offsetof(meta_globals_t, status))), int32_t(MRES_UNSET));
 
 	if (need_ret_slots) {
 		Reg ret_ptr = em.new_gp_ptr();
-		em.lea(ret_ptr, orig_ret_mem);
-		em.store_word(em.ptr(globals, int32_t(offsetof(meta_globals_t, orig_ret)), sizeof(uintptr_t)), ret_ptr);
+		em.lea_stack(ret_ptr, orig_ret_mem);
+		em.store_word(em.ptr(globals, int32_t(offsetof(meta_globals_t, orig_ret))), ret_ptr);
 
-		em.lea(ret_ptr, over_ret_mem);
-		em.store_word(em.ptr(globals, int32_t(offsetof(meta_globals_t, override_ret)), sizeof(uintptr_t)), ret_ptr);
+		em.lea_stack(ret_ptr, over_ret_mem);
+		em.store_word(em.ptr(globals, int32_t(offsetof(meta_globals_t, override_ret))), ret_ptr);
 	}
 
 	// esp_save = address of meta_globals backup region. meta_collect_fix_data
 	// uses this address to walk paused callbacks across rebuild.
 	{
 		Reg mg_addr = em.new_gp_ptr();
-		em.lea(mg_addr, mg_at(0));
-		em.store_word(em.ptr(globals, int32_t(offsetof(meta_globals_t, esp_save)), sizeof(uintptr_t)), mg_addr);
+		em.lea_stack(mg_addr, mg_at(0));
+		em.store_word(em.ptr(globals, int32_t(offsetof(meta_globals_t, esp_save))), mg_addr);
 	}
 
 	auto emit_plugin_loop = [&](size_t table_offset) {
@@ -277,7 +277,7 @@ void emit_orchestration(IEmitter& em, const jitdata_t& jd,
 	Label skip_supercede = em.new_label();
 	{
 		Reg status_reg = em.new_gp32();
-		em.load_dword(status_reg, em.ptr(globals, int32_t(offsetof(meta_globals_t, status)), 4));
+		em.load_dword(status_reg, em.ptr(globals, int32_t(offsetof(meta_globals_t, status))));
 		em.cmp_imm(status_reg, int32_t(MRES_SUPERCEDE));
 		Label do_original = em.new_label();
 		em.branch_ne(do_original);
@@ -327,7 +327,7 @@ void emit_orchestration(IEmitter& em, const jitdata_t& jd,
 	for (size_t off = 0; off < mg_size; off += sizeof(intptr_t)) {
 		Reg tmp = em.new_gp_ptr();
 		em.load_word(tmp, em.stack_at(locals_base, int32_t(off)));
-		em.store_word(em.ptr(globals, int32_t(off), sizeof(intptr_t)), tmp);
+		em.store_word(em.ptr(globals, int32_t(off)), tmp);
 	}
 
 	// Final return value: status >= MRES_OVERRIDE picks over_ret, else orig_ret.
@@ -335,7 +335,7 @@ void emit_orchestration(IEmitter& em, const jitdata_t& jd,
 		Reg ret = em.new_gp_ptr();
 		em.load_word(ret, orig_ret_mem);
 		Reg status = em.new_gp32();
-		em.load_dword(status, em.ptr(globals, int32_t(offsetof(meta_globals_t, status)), 4));
+		em.load_dword(status, em.ptr(globals, int32_t(offsetof(meta_globals_t, status))));
 		em.cmp_imm(status, int32_t(MRES_OVERRIDE));
 		Label done = em.new_label();
 		em.branch_below_unsigned(done);
@@ -343,10 +343,10 @@ void emit_orchestration(IEmitter& em, const jitdata_t& jd,
 		em.bind_label(done);
 		em.ret_gp(ret);
 	} else if (jd.rettype == rt_float) {
-		Reg ret = em.new_vec_ss();
+		Reg ret = em.new_vec_f32();
 		em.load_float(ret, orig_ret_mem);
 		Reg status = em.new_gp32();
-		em.load_dword(status, em.ptr(globals, int32_t(offsetof(meta_globals_t, status)), 4));
+		em.load_dword(status, em.ptr(globals, int32_t(offsetof(meta_globals_t, status))));
 		em.cmp_imm(status, int32_t(MRES_OVERRIDE));
 		Label done = em.new_label();
 		em.branch_below_unsigned(done);

@@ -11,8 +11,8 @@
 //   test r, r ; jz l                cbz r, l
 //   cmp a, b ; cmovl a, b           cmp a, b ; csel a, b, a, lt
 //   xor r, r                        mov r, xzr
-//   pxor v, v                       fmov v.s, wzr
-//   lea r, [mem]                    load_address_of (AsmJit pseudo)
+//   pxor v, v                       movi v.16b, #0
+//   lea r, [stack_mem]              load_address_of (AsmJit pseudo)
 //   movss [mem], xmm                str s_vec, [mem]
 //   ret reg                         ret reg
 
@@ -53,8 +53,8 @@ public:
 
 	Reg new_gp_ptr() override	{ return m_cc->new_gp_ptr(); }
 	Reg new_gp32() override		{ return m_cc->new_gp32(); }
-	Reg new_vec_ss() override	{ return m_cc->new_vec_s(); }
-	Reg new_vec_sd() override	{ return m_cc->new_vec_d(); }
+	Reg new_vec_f32() override	{ return m_cc->new_vec_s(); }
+	Reg new_vec_f64() override	{ return m_cc->new_vec_d(); }
 
 	BaseMem new_stack(uint32_t size, uint32_t alignment) override
 	{
@@ -64,16 +64,17 @@ public:
 	{
 		return base.clone_adjusted(off);
 	}
-	BaseMem ptr(const Reg& base, int32_t off, uint32_t /*size*/) override
+	BaseMem ptr(const Reg& base, int32_t off) override
 	{
 		return a64::ptr(base.as<a64::Gp>(), off);
 	}
 
 	void mov_imm(const Reg& dst, uintptr_t val) override
 	{
-		// a64::Compiler::mov(Gp, Imm) materializes large immediates as a
-		// movz/movk sequence; we don't have to manage that here.
-		m_cc->mov(dst.as<a64::Gp>().x(), Imm(val));
+		// Honor dst's allocated width: a64::Compiler::mov(Gp, Imm)
+		// materializes large immediates as a movz/movk sequence and emits
+		// the 32-bit form when given a w-register, 64-bit when given x.
+		m_cc->mov(dst.as<a64::Gp>(), Imm(val));
 	}
 	void mov_reg(const Reg& dst, const Reg& src) override
 	{
@@ -117,17 +118,17 @@ public:
 	}
 	void zero_vec(const Reg& vec) override
 	{
-		// fmov s_vec, wzr — copies the 32-bit zero register into the
-		// scalar vector register, yielding 0.0f.
-		m_cc->fmov(vec.as<a64::Vec>().s(), a64::wzr);
+		// movi v.16b, #0 — fully zero all 128 bits of the vector register,
+		// matching x86's pxor v,v semantics.
+		m_cc->movi(vec.as<a64::Vec>().b16(), Imm(0));
 	}
 
-	void lea(const Reg& dst, const BaseMem& mem) override
+	void lea_stack(const Reg& dst, const BaseMem& stack_mem) override
 	{
-		// AsmJit's a64::Compiler exposes lea-equivalent specifically for
-		// stack-allocated addresses. AArch64 has no LEA; this lowers to
-		// `add dst, sp, #offset` once frame layout is finalized.
-		m_cc->load_address_of(dst.as<a64::Gp>(), mem.as<a64::Mem>());
+		// AArch64 has no LEA; AsmJit's load_address_of pseudo lowers to
+		// `add dst, sp, #offset` once frame layout is finalized — only
+		// valid for stack-allocated mems.
+		m_cc->load_address_of(dst.as<a64::Gp>(), stack_mem.as<a64::Mem>());
 	}
 
 	void cmp_imm(const Reg& r, int32_t val) override
