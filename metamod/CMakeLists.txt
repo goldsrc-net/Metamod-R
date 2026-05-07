@@ -19,6 +19,8 @@
 # Use -DCMAKE_BUILD_TYPE=COMPAT_GLIBC
 # to backward compatibility with oldest version of glibc 2.11
 #
+# Use -DBUILD_64BIT=ON to compile 64-bit version (default is 32-bit)
+#
 #----------------------------------------
 
 cmake_minimum_required(VERSION 3.6)
@@ -26,6 +28,7 @@ project(metamod CXX)
 
 option(DEBUG "Build with debug information." OFF)
 option(USE_STATIC_LIBSTDC "Enables static linking libstdc++." OFF)
+option(BUILD_64BIT "Build 64-bit version instead of 32-bit." OFF)
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,8 +37,31 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_SHARED_LIBRARY_CXX_FLAGS "")
 set(CMAKE_SHARED_LIBRARY_LINK_CXX_FLAGS "")
 
-set(COMPILE_FLAGS "-m32 -U_FORTIFY_SOURCE")
-set(LINK_FLAGS "-m32")
+if (BUILD_64BIT)
+	set(ARCH_FLAG "-m64")
+	set(METAMOD_OUTPUT_NAME "metamod_amd64")
+	set(COMPAT_GLIBC_LIB_DIR "linux64")
+else()
+	set(ARCH_FLAG "-m32")
+	set(METAMOD_OUTPUT_NAME "metamod_i386")
+	set(COMPAT_GLIBC_LIB_DIR "linux32")
+endif()
+
+# Apply arch flag globally so the AsmJit submodule build matches.
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${ARCH_FLAG}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ARCH_FLAG}")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${ARCH_FLAG}")
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${ARCH_FLAG}")
+set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} ${ARCH_FLAG}")
+
+set(COMPILE_FLAGS "${ARCH_FLAG} -U_FORTIFY_SOURCE")
+set(LINK_FLAGS "${ARCH_FLAG}")
+
+set(ASMJIT_STATIC ON CACHE BOOL "Build AsmJit as a static library" FORCE)
+set(ASMJIT_NO_AARCH64 ON CACHE BOOL "Disable AArch64 backend" FORCE)
+# AsmJit links into a shared library, so its objects must be PIC.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+add_subdirectory(extern/asmjit EXCLUDE_FROM_ALL)
 
 set(COMPILE_FLAGS "${COMPILE_FLAGS} -Wall -fno-exceptions -fno-builtin -Wno-unknown-pragmas")
 
@@ -175,6 +201,7 @@ target_sources(metamod PRIVATE
 target_link_libraries(metamod PRIVATE
 	dl
 	pthread
+	asmjit::asmjit
 	$<$<CONFIG:COMPAT_GLIBC>:libc-2.11.1.so>
 )
 
@@ -186,11 +213,11 @@ endif()
 if (CMAKE_BUILD_TYPE MATCHES COMPAT_GLIBC)
 	set(LINK_FLAGS "${LINK_FLAGS} \
 		-Wl,-rpath,'$ORIGIN/.' \
-		-L${PROJECT_SOURCE_DIR}/lib/linux32")
+		-L${PROJECT_SOURCE_DIR}/lib/${COMPAT_GLIBC_LIB_DIR}")
 endif()
 
 set_target_properties(metamod PROPERTIES
-	OUTPUT_NAME metamod_i386
+	OUTPUT_NAME ${METAMOD_OUTPUT_NAME}
 	PREFIX ""
 	COMPILE_FLAGS ${COMPILE_FLAGS}
 	LINK_FLAGS ${LINK_FLAGS}

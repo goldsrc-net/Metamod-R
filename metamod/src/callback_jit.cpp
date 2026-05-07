@@ -1,388 +1,577 @@
 #include "precompiled.h"
 
+#include <asmjit/x86.h>
+#include <cstdarg>
+
 CJit g_jit;
 
-class CUniqueLabel : public std::string
-{
-public:
-	CUniqueLabel(const char* name) : std::string(std::string(name) + std::to_string(m_unique_index++))
-	{
-	}
+namespace {
 
-private:
-	static size_t m_unique_index;
+using namespace asmjit;
+
+// Process-wide JIT runtime owns code allocations made by AsmJit during
+// assembly. We re-copy emitted bytes into our own RWX allocator afterwards
+// so static_allocator-based pattern queries continue to work; the runtime
+// here is just a host for CodeHolder configuration.
+JitRuntime& jit_runtime()
+{
+	static JitRuntime rt;
+	return rt;
+}
+
+TypeId arg_type_id(argtype_t t)
+{
+	switch (t) {
+	case at_float:	return TypeId::kFloat32;
+	case at_double:	return TypeId::kFloat64;
+	default:	return TypeId::kIntPtr;
+	}
+}
+
+TypeId ret_type_id(rettype_t r)
+{
+	switch (r) {
+	case rt_float:		return TypeId::kFloat32;
+	case rt_integer:	return TypeId::kIntPtr;
+	default:		return TypeId::kVoid;
+	}
+}
+
+FuncSignature engine_signature(const jitdata_t& jd)
+{
+	FuncSignature sig(CallConvId::kCDecl);
+	sig.set_ret(ret_type_id(jd.rettype));
+	for (size_t i = 0; i < jd.args_count; ++i)
+		sig.add_arg(arg_type_id(jd.arg_types.types[i]));
+	if (jd.has_varargs)
+		sig.set_va_index(uint32_t(jd.args_count));
+	return sig;
+}
+
+// Allocates a fresh virtual register matching the given argtype.
+Reg new_arg_reg(x86::Compiler& cc, argtype_t t)
+{
+	switch (t) {
+	case at_float:
+	case at_double:
+		return cc.new_xmm();
+	default:
+		return cc.new_gp_ptr();
+	}
+}
+
+// Emit an integer-load of the given size from `mem` into a fresh GP and
+// store it at `dst_mem` (size matches). Used for byte-by-byte struct copy.
+void emit_word_copy(x86::Compiler& cc, const x86::Mem& dst, const x86::Mem& src)
+{
+	x86::Gp tmp = cc.new_gp_ptr();
+	cc.mov(tmp, src);
+	cc.mov(dst, tmp);
+}
+
+// Records the (handler_slot, post-call label) pair for a single registered
+// invocation site. Resolved into absolute addresses post-relocation.
+struct emit_call_site_t
+{
+	Label		after_call;
+	uintptr_t	handler_slot;
 };
 
-size_t CUniqueLabel::m_unique_index;
-
-class CForwardCallbackJIT : public jitasm::function<void, CForwardCallbackJIT>
+struct emit_result_t
 {
-public:
-	CForwardCallbackJIT(jitdata_t* jitdata);
-	void naked_main();
-	void call_func(Reg32 addr);
-	void jit_debug(const char* format, ...);
-
-private:
-	jitdata_t* m_jitdata;
-
-	enum
-	{
-		mg_mres = 0,
-		mg_prev_mres = 4,
-		mg_status = 8,
-		mg_orig_ret = 12,
-		mg_over_ret = 16,
-		mg_esp_save = 20
-	};
-
-	enum
-	{
-		first_arg_offset = 12,
-		xmmreg_size = 16
-	};
-
-	static size_t align(size_t v, size_t a)
-	{
-		return (v + a - 1) & ~(a - 1);
-	}
+	std::vector<emit_call_site_t> sites;
 };
 
-CForwardCallbackJIT::CForwardCallbackJIT(jitdata_t* jitdata) : m_jitdata(jitdata)
+class CForwardCallbackJIT
 {
+public:
+	CForwardCallbackJIT(const jitdata_t& jd) : m_jd(jd) {}
+	emit_result_t emit(x86::Compiler& cc);
+
+private:
+	void emit_passthrough_only(x86::Compiler& cc, FuncNode* func, std::vector<Reg>& args);
+	void emit_orchestration(x86::Compiler& cc, FuncNode* func, std::vector<Reg>& args, emit_result_t& result);
+	void emit_invoke_handler(
+		x86::Compiler& cc,
+		const x86::Gp& target_reg,
+		const std::vector<Reg>& args,
+		bool capture_return,
+		Reg& out_ret,
+		Label& out_after_call);
+	void emit_invoke_imm(
+		x86::Compiler& cc,
+		uintptr_t target,
+		const std::vector<Reg>& args,
+		bool capture_return,
+		Reg& out_ret,
+		Label& out_after_call);
+	void emit_status_update(x86::Compiler& cc, const x86::Gp& globals, bool is_post);
+	void emit_save_override(
+		x86::Compiler& cc,
+		const x86::Gp& globals,
+		const x86::Mem& over_ret_mem,
+		const Reg& ret_reg);
+
+	const jitdata_t& m_jd;
+};
+
+void CForwardCallbackJIT::emit_passthrough_only(x86::Compiler& cc, FuncNode*, std::vector<Reg>& args)
+{
+	// For varargs callbacks (or when no plugins/mm_hook actually want it) we
+	// emit a thin wrapper that calls the original directly with no plugin
+	// notification. Returning the original's result preserves engine semantics.
+	if (!m_jd.pfn_original) {
+		// No original to forward to; just return zero/void.
+		if (m_jd.rettype == rt_integer) {
+			x86::Gp z = cc.new_gp_ptr();
+			cc.xor_(z, z);
+			cc.ret(z);
+		} else if (m_jd.rettype == rt_float) {
+			x86::Vec z = cc.new_xmm();
+			cc.pxor(z, z);
+			cc.ret(z);
+		} else {
+			cc.ret();
+		}
+		return;
+	}
+
+	InvokeNode* inv;
+	cc.invoke(Out(inv), imm(m_jd.pfn_original), engine_signature(m_jd));
+	for (size_t i = 0; i < args.size(); ++i)
+		inv->set_arg(i, args[i]);
+
+	if (m_jd.rettype == rt_integer) {
+		x86::Gp r = cc.new_gp_ptr();
+		inv->set_ret(0, r);
+		cc.ret(r);
+	} else if (m_jd.rettype == rt_float) {
+		x86::Vec r = cc.new_xmm();
+		inv->set_ret(0, r);
+		cc.ret(r);
+	} else {
+		cc.ret();
+	}
 }
 
-void CForwardCallbackJIT::naked_main()
+void CForwardCallbackJIT::emit_invoke_imm(
+	x86::Compiler& cc,
+	uintptr_t target,
+	const std::vector<Reg>& args,
+	bool capture_return,
+	Reg& out_ret,
+	Label& out_after_call)
 {
-	// prologue
-	push(ebx);
-	push(ebp);
-	mov(ebp, esp);
-	and_(esp, 0xFFFFFFF0); // stack must be 16-aligned when we calling subroutines
+	InvokeNode* inv;
+	cc.invoke(Out(inv), imm(target), engine_signature(m_jd));
+	for (size_t i = 0; i < args.size(); ++i)
+		inv->set_arg(i, args[i]);
 
-	enum // stack map
-	{
-		/* META GLOBALS BACKUP */
-		/* STRING BUFFER */
-		over_ret = sizeof(int),
-		orig_ret = 0
+	if (capture_return && m_jd.rettype != rt_void) {
+		if (m_jd.rettype == rt_integer) {
+			x86::Gp r = cc.new_gp_ptr();
+			inv->set_ret(0, r);
+			out_ret = r;
+		} else {
+			x86::Vec r = cc.new_xmm();
+			inv->set_ret(0, r);
+			out_ret = r;
+		}
+	}
+
+	out_after_call = cc.new_label();
+	cc.bind(out_after_call);
+}
+
+void CForwardCallbackJIT::emit_invoke_handler(
+	x86::Compiler& cc,
+	const x86::Gp& target_reg,
+	const std::vector<Reg>& args,
+	bool capture_return,
+	Reg& out_ret,
+	Label& out_after_call)
+{
+	InvokeNode* inv;
+	cc.invoke(Out(inv), target_reg, engine_signature(m_jd));
+	for (size_t i = 0; i < args.size(); ++i)
+		inv->set_arg(i, args[i]);
+
+	if (capture_return && m_jd.rettype != rt_void) {
+		if (m_jd.rettype == rt_integer) {
+			x86::Gp r = cc.new_gp_ptr();
+			inv->set_ret(0, r);
+			out_ret = r;
+		} else {
+			x86::Vec r = cc.new_xmm();
+			inv->set_ret(0, r);
+			out_ret = r;
+		}
+	}
+
+	out_after_call = cc.new_label();
+	cc.bind(out_after_call);
+}
+
+void CForwardCallbackJIT::emit_save_override(
+	x86::Compiler& cc,
+	const x86::Gp& globals,
+	const x86::Mem& over_ret_mem,
+	const Reg& ret_reg)
+{
+	// if (mres >= MRES_OVERRIDE) over_ret = ret_reg
+	x86::Gp mres_reg = cc.new_gp32();
+	Label skip = cc.new_label();
+	cc.mov(mres_reg, x86::dword_ptr(globals, int32_t(offsetof(meta_globals_t, mres))));
+	cc.cmp(mres_reg, int32_t(MRES_OVERRIDE));
+	cc.jb(skip);
+
+	if (m_jd.rettype == rt_integer) {
+		cc.mov(over_ret_mem.clone_resized(sizeof(intptr_t)), ret_reg.as<x86::Gp>());
+	} else {
+		// Float/double: spill xmm into the slot. Slot is sized intptr_t but
+		// only the low 4 bytes (single) or 8 bytes (double) matter.
+		cc.movss(over_ret_mem.clone_resized(4), ret_reg.as<x86::Vec>());
+	}
+	cc.bind(skip);
+}
+
+void CForwardCallbackJIT::emit_status_update(x86::Compiler& cc, const x86::Gp& globals, bool /*is_post*/)
+{
+	// status = max(status, mres) — same on pre and post loops.
+	x86::Gp mres_reg = cc.new_gp32();
+	x86::Gp status_reg = cc.new_gp32();
+	cc.mov(mres_reg, x86::dword_ptr(globals, int32_t(offsetof(meta_globals_t, mres))));
+	cc.mov(status_reg, x86::dword_ptr(globals, int32_t(offsetof(meta_globals_t, status))));
+	cc.cmp(status_reg, mres_reg);
+	cc.cmovl(status_reg, mres_reg);
+	cc.mov(x86::dword_ptr(globals, int32_t(offsetof(meta_globals_t, status))), status_reg);
+}
+
+void CForwardCallbackJIT::emit_orchestration(x86::Compiler& cc, FuncNode*, std::vector<Reg>& args, emit_result_t& result)
+{
+	const size_t mg_size = sizeof(meta_globals_t);
+	const size_t ret_slot_size = sizeof(intptr_t);
+	const bool need_ret_slots = (m_jd.rettype != rt_void);
+	const size_t locals_size = mg_size + (need_ret_slots ? 2 * ret_slot_size : 0);
+
+	// One combined stack region: [mg_backup | orig_ret | over_ret].
+	// mg_backup at offset 0 so its address can be used as g_metaGlobals.esp_save.
+	x86::Mem locals_base = cc.new_stack(uint32_t(locals_size), 16);
+
+	auto mg_at = [&](size_t off) {
+		return locals_base.clone_adjusted(int32_t(off));
 	};
 
-	auto globals = ebx;
-	auto locals_size = m_jitdata->rettype != rt_void ? sizeof(int) * 2 /* orig + over */ : 0;
-	auto framesize = align(locals_size + sizeof(meta_globals_t) + /* for align */m_jitdata->args_count * sizeof(int), xmmreg_size) - m_jitdata->args_count * sizeof(int);
-
-	if (m_jitdata->has_varargs) {
-		size_t strbuf_offset = locals_size;
-
-		sub(esp, framesize += align(MAX_STRBUF_LEN, xmmreg_size));
-
-		// format varargs
-		lea(edx, dword_ptr[ebp + first_arg_offset + m_jitdata->args_count * sizeof(int)]); // varargs ptr
-		if (strbuf_offset)
-			lea(eax, dword_ptr[esp + strbuf_offset]); // buf ptr
-		else
-			mov(eax, esp);
-		mov(ecx, size_t(Q_vsnprintf));
-
-		push(edx);
-		push(dword_ptr[ebp + first_arg_offset + (m_jitdata->args_count - 1) * sizeof(int)]); // last arg of pfn (format string)
-		push(MAX_STRBUF_LEN);
-		push(eax);
-		call(ecx);
-		add(esp, 4 * sizeof(int));
-	}
-	else
-		sub(esp, framesize);
-
-	size_t mg_backup = framesize - sizeof(meta_globals_t);
-
-	// setup globals ptr and backup old data
-	mov(globals, size_t(&g_metaGlobals));
-	movaps(xmm0, xmmword_ptr[globals]);
-	movq(xmm1, qword_ptr[globals + xmmreg_size]);
-	movaps(xmmword_ptr[esp + mg_backup + sizeof(int) * 2], xmm0);
-	movq(qword_ptr[esp + mg_backup], xmm1);
-
-	// call metamod's pre hook if present
-	if (m_jitdata->mm_hook && m_jitdata->mm_hook_time == P_PRE) {
-		mov(ecx, m_jitdata->mm_hook);
-		call_func(ecx);
+	x86::Mem orig_ret_mem;
+	x86::Mem over_ret_mem;
+	if (need_ret_slots) {
+		orig_ret_mem = locals_base.clone_adjusted(int32_t(mg_size));
+		over_ret_mem = locals_base.clone_adjusted(int32_t(mg_size + ret_slot_size));
 	}
 
-	// setup meta globals
-	mov(dword_ptr[globals + mg_mres], MRES_UNSET);
-	mov(dword_ptr[globals + mg_status], MRES_UNSET);
-	mov(dword_ptr[globals + mg_esp_save], esp);
+	// Pointer to g_metaGlobals (kept across the body).
+	x86::Gp globals = cc.new_gp_ptr("globals");
+	cc.mov(globals, imm(uintptr_t(&g_metaGlobals)));
 
-	// setup retval pointers
-	if (m_jitdata->rettype != rt_void) {
-		lea(eax, dword_ptr[esp + over_ret]);
-		mov(dword_ptr[globals + mg_orig_ret], esp);
-		mov(dword_ptr[globals + mg_over_ret], eax);
+	// Backup g_metaGlobals into the local mg slot, intptr-sized words.
+	for (size_t off = 0; off < mg_size; off += sizeof(intptr_t)) {
+		emit_word_copy(
+			cc,
+			mg_at(off).clone_resized(sizeof(intptr_t)),
+			x86::ptr(globals, int32_t(off), sizeof(intptr_t)));
 	}
 
-	// call pre
-	for (auto plug : *m_jitdata->plugins) {
-		if (plug->status() < PL_RUNNING) // allow only running and paused
-			continue;
-
-		size_t fn_table = *(size_t *)(size_t(plug) + m_jitdata->table_offset);
-
-		// plugin don't want any hooks from that table
-		if (!fn_table)
-			continue;
-
-		CUniqueLabel go_next_plugin("go_next_plugin");
-
-		// check status and handler set
-		mov(ecx, dword_ptr[fn_table + m_jitdata->pfn_offset]);
-		cmp(byte_ptr[plug->status_ptr()], PL_RUNNING);
-		jecxz(go_next_plugin);
-		jnz(go_next_plugin);
-
-		// update meta globals
-		mov(eax, dword_ptr[globals + mg_mres]);
-		mov(dword_ptr[globals + mg_mres], MRES_IGNORED);
-		mov(dword_ptr[globals + mg_prev_mres], eax);
-
-		call_func(ecx);
-
-		// update highest meta result
-		mov(edx, dword_ptr[globals + mg_mres]);
-		mov(ecx, dword_ptr[globals + mg_status]);
-		cmp(edx, ecx);
-		cmovg(ecx, edx);
-		mov(dword_ptr[globals + mg_status], ecx);
-
-		// save return value if override or supercede
-		if (m_jitdata->rettype != rt_void) {
-			if (m_jitdata->rettype == rt_float) {
-				sub(esp, sizeof(int));
-				fstp(dword_ptr[esp]);
-				pop(eax);
-			}
-
-			mov(ecx, dword_ptr[esp + over_ret]);
-			cmp(edx, MRES_OVERRIDE);
-			cmovae(ecx, eax);
-			mov(dword_ptr[esp + over_ret], ecx);
-		}
-
-		L(go_next_plugin);
+	// Pre-hook: metamod's mm_hook
+	if (m_jd.mm_hook && m_jd.mm_hook_time == P_PRE) {
+		Reg ignored;
+		Label after_call;
+		emit_invoke_imm(cc, m_jd.mm_hook, args, /*capture_return=*/false, ignored, after_call);
+		result.sites.push_back({after_call, m_jd.mm_hook});
 	}
 
-	// call original if it needed
-	cmp(dword_ptr[globals + mg_status], MRES_SUPERCEDE);
-	jz("skip_original");
+	// Initialize meta_globals fields for our own dispatch.
+	cc.mov(x86::dword_ptr(globals, int32_t(offsetof(meta_globals_t, mres))), int32_t(MRES_UNSET));
+	cc.mov(x86::dword_ptr(globals, int32_t(offsetof(meta_globals_t, status))), int32_t(MRES_UNSET));
+
+	if (need_ret_slots) {
+		// orig_ret pointer = address of orig_ret_mem
+		x86::Gp ret_ptr = cc.new_gp_ptr();
+		cc.lea(ret_ptr, orig_ret_mem);
+		cc.mov(x86::ptr(globals, int32_t(offsetof(meta_globals_t, orig_ret)), sizeof(uintptr_t)), ret_ptr);
+
+		cc.lea(ret_ptr, over_ret_mem);
+		cc.mov(x86::ptr(globals, int32_t(offsetof(meta_globals_t, override_ret)), sizeof(uintptr_t)), ret_ptr);
+	}
+
+	// esp_save points at the meta_globals backup region (stable address inside
+	// our frame). meta_collect_fix_data uses it to walk paused callbacks.
 	{
-		// and present
-		if (m_jitdata->pfn_original) {
-			mov(ecx, m_jitdata->pfn_original);
-			call_func(ecx);
-		}
-
-		// store original return value
-		if (m_jitdata->rettype == rt_integer) {
-			if (m_jitdata->pfn_original)
-				mov(dword_ptr[esp + orig_ret], eax);
-			else
-				mov(dword_ptr[esp + orig_ret], TRUE); // fix for should collide :/
-
-			jmp("skip_supercede");
-		}
-		else if (m_jitdata->rettype == rt_float) {
-			if (m_jitdata->pfn_original)
-				fstp(dword_ptr[esp + orig_ret]);
-			else
-				mov(dword_ptr[esp + orig_ret], 0);
-
-			jmp("skip_supercede");
-		}
+		x86::Gp mg_addr = cc.new_gp_ptr();
+		cc.lea(mg_addr, mg_at(0));
+		cc.mov(x86::ptr(globals, int32_t(offsetof(meta_globals_t, esp_save)), sizeof(uintptr_t)), mg_addr);
 	}
-	L("skip_original");
+
+	auto emit_plugin_loop = [&](size_t table_offset) {
+		if (!m_jd.plugins) return;
+
+		for (auto plug : *m_jd.plugins) {
+			if (plug->status() < PL_RUNNING)
+				continue;
+
+			uintptr_t fn_table = *(uintptr_t *)(uintptr_t(plug) + table_offset);
+			if (!fn_table)
+				continue;
+
+			uintptr_t handler_slot = fn_table + m_jd.pfn_offset;
+			uintptr_t status_ptr = uintptr_t(plug->status_ptr());
+
+			Label go_next = cc.new_label();
+
+			// Status check: skip if plugin is no longer running.
+			x86::Gp status_addr_reg = cc.new_gp_ptr();
+			x86::Gp status_byte = cc.new_gp8();
+			cc.mov(status_addr_reg, imm(status_ptr));
+			cc.movzx(cc.new_gp32(), x86::byte_ptr(status_addr_reg));
+			// Cleaner form using cmp on memory:
+			cc.cmp(x86::byte_ptr(status_addr_reg), int32_t(PL_RUNNING));
+			cc.jne(go_next);
+
+			// Load handler fn-ptr from slot. Skip if null.
+			x86::Gp slot_reg = cc.new_gp_ptr();
+			x86::Gp handler_reg = cc.new_gp_ptr();
+			cc.mov(slot_reg, imm(handler_slot));
+			cc.mov(handler_reg, x86::ptr(slot_reg, 0, sizeof(uintptr_t)));
+			cc.test(handler_reg, handler_reg);
+			cc.jz(go_next);
+
+			// prev_mres = mres; mres = MRES_IGNORED
+			x86::Gp old_mres = cc.new_gp32();
+			cc.mov(old_mres, x86::dword_ptr(globals, int32_t(offsetof(meta_globals_t, mres))));
+			cc.mov(x86::dword_ptr(globals, int32_t(offsetof(meta_globals_t, prev_mres))), old_mres);
+			cc.mov(x86::dword_ptr(globals, int32_t(offsetof(meta_globals_t, mres))), int32_t(MRES_IGNORED));
+
+			// Invoke handler.
+			Reg ret_reg;
+			Label after_call;
+			emit_invoke_handler(cc, handler_reg, args, need_ret_slots, ret_reg, after_call);
+			result.sites.push_back({after_call, handler_slot});
+
+			// status = max(status, mres)
+			emit_status_update(cc, globals, /*is_post=*/false);
+
+			// override_ret = ret if mres >= MRES_OVERRIDE
+			if (need_ret_slots)
+				emit_save_override(cc, globals, over_ret_mem, ret_reg);
+
+			cc.bind(go_next);
+		}
+	};
+
+	emit_plugin_loop(m_jd.table_offset);
+
+	// Original call.
+	Label skip_supercede = cc.new_label();
 	{
-		if (m_jitdata->rettype != rt_void) {
-			// if supercede
-			mov(eax, dword_ptr[esp + over_ret]);
-			mov(dword_ptr[esp + orig_ret], eax);
+		x86::Gp status_reg = cc.new_gp32();
+		cc.mov(status_reg, x86::dword_ptr(globals, int32_t(offsetof(meta_globals_t, status))));
+		cc.cmp(status_reg, int32_t(MRES_SUPERCEDE));
+		Label do_original = cc.new_label();
+		cc.jne(do_original);
 
-			L("skip_supercede");
+		// Superceded: orig_ret = over_ret
+		if (need_ret_slots) {
+			x86::Gp tmp = cc.new_gp_ptr();
+			cc.mov(tmp, over_ret_mem.clone_resized(sizeof(uintptr_t)));
+			cc.mov(orig_ret_mem.clone_resized(sizeof(uintptr_t)), tmp);
 		}
-	}
-	L("skip_all");
+		cc.jmp(skip_supercede);
 
-	// call post
-	for (auto plug : *m_jitdata->plugins) {
-		if (plug->status() < PL_RUNNING) // allow only running and paused
-			continue;
+		cc.bind(do_original);
 
-		size_t fn_table = *(size_t *)(size_t(plug) + m_jitdata->post_table_offset);
+		if (m_jd.pfn_original) {
+			Reg ret_reg;
+			Label after_call;
+			emit_invoke_imm(cc, m_jd.pfn_original, args, need_ret_slots, ret_reg, after_call);
+			(void)after_call;	// not registering original-call retaddrs (no fixup needed; original is stable)
 
-		// plugin don't want any hooks from that table
-		if (!fn_table)
-			continue;
-
-		CUniqueLabel go_next_plugin("go_next_plugin");
-
-		// check status and handler set
-		mov(ecx, dword_ptr[fn_table + m_jitdata->pfn_offset]);
-		cmp(byte_ptr[plug->status_ptr()], PL_RUNNING);
-		jecxz(go_next_plugin);
-		jnz(go_next_plugin);
-
-		// update meta globals
-		mov(eax, dword_ptr[globals + mg_mres]);
-		mov(dword_ptr[globals + mg_mres], MRES_IGNORED);
-		mov(dword_ptr[globals + mg_prev_mres], eax);
-
-		call_func(ecx);
-
-		// update highest meta result
-		mov(edx, dword_ptr[globals + mg_mres]);
-		mov(ecx, dword_ptr[globals + mg_status]);
-		cmp(ecx, edx);
-		cmovl(ecx, edx);
-		mov(dword_ptr[globals + mg_status], ecx);
-
-		// save return value if override or supercede
-		if (m_jitdata->rettype != rt_void) {
-			if (m_jitdata->rettype == rt_float) {
-				sub(esp, sizeof(int));
-				fstp(dword_ptr[esp]);
-				pop(eax);
+			if (m_jd.rettype == rt_integer) {
+				cc.mov(orig_ret_mem.clone_resized(sizeof(uintptr_t)), ret_reg.as<x86::Gp>());
+			} else if (m_jd.rettype == rt_float) {
+				cc.movss(orig_ret_mem.clone_resized(4), ret_reg.as<x86::Vec>());
 			}
-
-			cmp(edx, MRES_OVERRIDE);
-			mov(ecx, dword_ptr[esp + over_ret]);
-			cmovae(ecx, eax);
-			mov(dword_ptr[esp + over_ret], ecx);
+		} else if (m_jd.rettype == rt_integer) {
+			// Quirk: pfnShouldCollide etc. default to TRUE when no original.
+			cc.mov(orig_ret_mem.clone_resized(sizeof(uintptr_t)), int32_t(1));
+		} else if (m_jd.rettype == rt_float) {
+			x86::Gp z = cc.new_gp32();
+			cc.xor_(z, z);
+			cc.mov(orig_ret_mem.clone_resized(4), z);
 		}
+	}
+	cc.bind(skip_supercede);
 
-		L(go_next_plugin);
+	// Post-hook plugin loop.
+	emit_plugin_loop(m_jd.post_table_offset);
+
+	// Post-hook: metamod's mm_hook
+	if (m_jd.mm_hook && m_jd.mm_hook_time == P_POST) {
+		Reg ignored;
+		Label after_call;
+		emit_invoke_imm(cc, m_jd.mm_hook, args, /*capture_return=*/false, ignored, after_call);
+		result.sites.push_back({after_call, m_jd.mm_hook});
 	}
 
-	// call metamod's post hook if present
-	if (m_jitdata->mm_hook && m_jitdata->mm_hook_time == P_POST) {
-		mov(ecx, m_jitdata->mm_hook);
-		call_func(ecx);
+	// Restore g_metaGlobals from backup.
+	for (size_t off = 0; off < mg_size; off += sizeof(intptr_t)) {
+		emit_word_copy(
+			cc,
+			x86::ptr(globals, int32_t(off), sizeof(intptr_t)),
+			mg_at(off).clone_resized(sizeof(intptr_t)));
 	}
 
-	// setup return value and override it if needed
-	if (m_jitdata->rettype == rt_integer) {
-		mov(eax, dword_ptr[esp + orig_ret]);
-		cmp(dword_ptr[globals + mg_status], MRES_OVERRIDE);
-		cmovae(eax, dword_ptr[esp + over_ret]);
+	// Compute final return value.
+	if (m_jd.rettype == rt_integer) {
+		x86::Gp ret = cc.new_gp_ptr();
+		cc.mov(ret, orig_ret_mem.clone_resized(sizeof(uintptr_t)));
+		x86::Gp status = cc.new_gp32();
+		cc.mov(status, x86::dword_ptr(globals, int32_t(offsetof(meta_globals_t, status))));
+		cc.cmp(status, int32_t(MRES_OVERRIDE));
+		x86::Gp over = cc.new_gp_ptr();
+		cc.mov(over, over_ret_mem.clone_resized(sizeof(uintptr_t)));
+		cc.cmovae(ret, over);
+		cc.ret(ret);
+	} else if (m_jd.rettype == rt_float) {
+		x86::Vec ret = cc.new_xmm();
+		cc.movss(ret, orig_ret_mem.clone_resized(4));
+		x86::Gp status = cc.new_gp32();
+		cc.mov(status, x86::dword_ptr(globals, int32_t(offsetof(meta_globals_t, status))));
+		cc.cmp(status, int32_t(MRES_OVERRIDE));
+		Label use_orig = cc.new_label();
+		cc.jb(use_orig);
+		cc.movss(ret, over_ret_mem.clone_resized(4));
+		cc.bind(use_orig);
+		cc.ret(ret);
+	} else {
+		cc.ret();
 	}
-	else if (m_jitdata->rettype == rt_float) {
-		lea(eax, dword_ptr[esp + over_ret]);
-		cmp(dword_ptr[globals + mg_status], MRES_OVERRIDE);
-		cmovb(eax, esp); // orig_ret
-		fld(dword_ptr[eax]);
-	}
-
-	// restore meta globals
-	movaps(xmm0, xmmword_ptr[esp + mg_backup + sizeof(int) * 2]);
-	movq(xmm1, qword_ptr[esp + mg_backup]);
-	movaps(xmmword_ptr[globals], xmm0);
-	movq(qword_ptr[globals + xmmreg_size], xmm1);
-
-	// epilogue
-	mov(esp, ebp);
-	pop(ebp);
-	pop(ebx);
-	ret();
 }
 
-void CForwardCallbackJIT::call_func(Reg32 addr)
+emit_result_t CForwardCallbackJIT::emit(x86::Compiler& cc)
 {
-	const size_t fixed_args_count = m_jitdata->args_count - (m_jitdata->has_varargs ? 1u /* excluding format string */ : 0u);
-	const size_t strbuf_offset = m_jitdata->rettype != rt_void ? sizeof(int) * 2u /* orig + over */ : 0u;
+	emit_result_t result;
 
-	// push formatted buf instead of format string
-	if (m_jitdata->has_varargs) {
-		if (strbuf_offset) {
-			lea(eax, dword_ptr[esp + strbuf_offset]);
-			push(eax);
-		}
-		else
-			push(esp);
+	FuncSignature entry_sig = engine_signature(m_jd);
+	FuncNode* func = cc.add_func(entry_sig);
 
-		push(size_t("%s"));
+	// Materialize incoming args into virtual regs we can re-pass.
+	std::vector<Reg> arg_regs;
+	arg_regs.reserve(m_jd.args_count);
+	for (size_t i = 0; i < m_jd.args_count; ++i) {
+		Reg r = new_arg_reg(cc, m_jd.arg_types.types[i]);
+		func->set_arg(i, r);
+		arg_regs.push_back(r);
 	}
 
-	// push normal args
-	for (size_t j = fixed_args_count; j > 0; j--)
-		push(dword_ptr[ebp + first_arg_offset + (j - 1) * sizeof(int)]);
+	if (m_jd.has_varargs) {
+		// AsmJit cannot synthesize forwarding of variadic args portably.
+		// Emit a passthrough that calls the original directly without
+		// notifying plugins. (Plugin hooks of variadic engine functions
+		// are unsupported in the AsmJit JIT path.)
+		emit_passthrough_only(cc, func, arg_regs);
+	} else {
+		emit_orchestration(cc, func, arg_regs, result);
+	}
 
-	// call
-	call(addr);
-
-	// pop stack
-	if (m_jitdata->args_count)
-		add(esp, (m_jitdata->args_count + (m_jitdata->has_varargs ? 1u : 0u)) * sizeof(int));
+	cc.end_func();
+	return result;
 }
 
-void CForwardCallbackJIT::jit_debug(const char* format, ...)
-{
-#ifdef JIT_DEBUG
-	va_list argptr;
-	char string[1024] = "";
-
-	va_start(argptr, format);
-	Q_vsnprintf(string, sizeof string, format, argptr);
-	va_end(argptr);
-
-	char* memory_leak = Q_strdup(string); // yes, I'm lazy
-	static size_t print_ptr = size_t(&printf);
-
-	pushad();
-	push(size_t(memory_leak));
-	call(dword_ptr[size_t(&print_ptr)]);
-#ifdef JIT_DEBUG_FILE
-	static size_t fprint_ptr = size_t(&mdebug_to_file);
-	call(dword_ptr[size_t(&fprint_ptr)]);
-#endif
-	add(esp, 4);
-	popad();
-#endif
-}
+} // namespace
 
 CJit::CJit() : m_callback_allocator(static_allocator::mp_rwx), m_tramp_allocator(static_allocator::mp_rwx)
 {
 }
 
+CJit::~CJit()
+{
+}
+
+void CJit::register_call_site(uintptr_t retaddr, uintptr_t handler_slot)
+{
+	m_retaddr_to_handler[retaddr] = handler_slot;
+	// First emitted retaddr for a given handler_slot wins; later ones are
+	// duplicates (shouldn't happen within one rebuild, but be defensive).
+	m_handler_to_retaddr.emplace(handler_slot, retaddr);
+}
+
 size_t CJit::compile_callback(jitdata_t* jitdata)
 {
-	if (!is_hook_needed(jitdata)) {
+	if (!is_hook_needed(jitdata))
+		return jitdata->pfn_original;
+
+	if (jitdata->args_count > MAX_CALLBACK_ARGS) {
+		// Signature exceeds our captured arg-type capacity. Fall back to
+		// passthrough; plugins won't see the call, but the engine still works.
 		return jitdata->pfn_original;
 	}
 
-	CForwardCallbackJIT callback(jitdata);
-	callback.Assemble();
+	CodeHolder code;
+	code.init(jit_runtime().environment(), jit_runtime().cpu_features());
 
-	auto code = callback.GetCode();
-	auto codeSize = callback.GetCodeSize();
-	auto ptr = m_callback_allocator.allocate(codeSize);
+	x86::Compiler cc(&code);
 
-	return (size_t)Q_memcpy(ptr, code, codeSize);
+	CForwardCallbackJIT emitter(*jitdata);
+	emit_result_t emitted = emitter.emit(cc);
+
+	if (cc.finalize() != kErrorOk)
+		return jitdata->pfn_original;
+
+	size_t code_size = code.code_size();
+	auto buf = (uint8_t *)m_callback_allocator.allocate(code_size);
+
+	// Relocate to the actual destination, then copy the flattened bytes.
+	if (code.relocate_to_base(uintptr_t(buf)) != kErrorOk)
+		return jitdata->pfn_original;
+
+	code.copy_flattened_data(buf, code_size, CopySectionFlags::kPadSectionBuffer);
+
+	// Resolve label offsets to absolute addresses now that base is fixed.
+	for (auto& site : emitted.sites) {
+		uint64_t off;
+		if (code.label_offset_from_base(site.after_call) == Globals::kInvalidId)
+			continue;
+		off = code.label_offset_from_base(site.after_call);
+		register_call_site(uintptr_t(buf) + uintptr_t(off), site.handler_slot);
+	}
+
+	return uintptr_t(buf);
 }
 
 size_t CJit::compile_tramp(size_t ptr_to_func)
 {
-	auto code = (uint8 *)m_tramp_allocator.allocate(2 + sizeof(int));
-
-	// jmp dword [ptr_to_func]
+#if defined(__x86_64__) || defined(_M_X64)
+	// movabs rax, ptr_to_func ; jmp qword ptr [rax]
+	auto code = (uint8_t *)m_tramp_allocator.allocate(12);
+	code[0] = 0x48;
+	code[1] = 0xB8;
+	*(uint64_t *)&code[2] = uint64_t(ptr_to_func);
+	code[10] = 0xFF;
+	code[11] = 0x20;
+#else
+	// jmp dword ptr [ptr_to_func]
+	auto code = (uint8_t *)m_tramp_allocator.allocate(2 + sizeof(uint32_t));
 	code[0] = 0xFFu;
 	code[1] = 0x25u;
-	*(size_t *)&code[2] = ptr_to_func;
-
-	return (size_t)code;
+	*(uint32_t *)&code[2] = uint32_t(ptr_to_func);
+#endif
+	return uintptr_t(code);
 }
 
 void CJit::clear_callbacks()
 {
 	m_callback_allocator.deallocate_all();
+	m_retaddr_to_handler.clear();
+	m_handler_to_retaddr.clear();
 }
 
 void CJit::clear_tramps()
@@ -390,21 +579,21 @@ void CJit::clear_tramps()
 	m_tramp_allocator.deallocate_all();
 }
 
-size_t CJit::is_callback_retaddr(uint32 addr)
+bool CJit::is_callback_retaddr(uintptr_t addr)
 {
-	if (m_callback_allocator.contain(addr)) {
-		// FF D1        call    ecx
-		// 83 C4 20     add     esp, 20h ; optional
-		// 8B 13        mov     edx, [ebx]
-		char *ptr = (char *)addr - 2;
-		return mem_compare(ptr, "\xFF\xD1\x83\xC4", 4) || mem_compare(ptr, "\xFF\xD1\x8B\x13", 4);
-	}
-	return false;
+	return m_retaddr_to_handler.find(addr) != m_retaddr_to_handler.end();
 }
 
-char* CJit::find_callback_pattern(char* pattern, size_t len)
+uintptr_t CJit::handler_slot_at_retaddr(uintptr_t retaddr) const
 {
-	return m_callback_allocator.find_pattern(pattern, len);
+	auto it = m_retaddr_to_handler.find(retaddr);
+	return it == m_retaddr_to_handler.end() ? 0 : it->second;
+}
+
+uintptr_t CJit::retaddr_for_handler_slot(uintptr_t handler_slot) const
+{
+	auto it = m_handler_to_retaddr.find(handler_slot);
+	return it == m_handler_to_retaddr.end() ? 0 : it->second;
 }
 
 bool CJit::is_hook_needed(jitdata_t* jitdata)
@@ -419,12 +608,11 @@ bool CJit::is_hook_needed(jitdata_t* jitdata)
 		return false;
 
 	for (auto& plug : *jitdata->plugins) {
-		const size_t fn_table		= *(size_t *)(size_t(plug) + jitdata->table_offset);
-		const size_t fn_table_post	= *(size_t *)(size_t(plug) + jitdata->post_table_offset);
+		const uintptr_t fn_table		= *(uintptr_t *)(uintptr_t(plug) + jitdata->table_offset);
+		const uintptr_t fn_table_post	= *(uintptr_t *)(uintptr_t(plug) + jitdata->post_table_offset);
 
-		if (fn_table || fn_table_post) {
+		if (fn_table || fn_table_post)
 			return true;
-		}
 	}
 
 	return false;

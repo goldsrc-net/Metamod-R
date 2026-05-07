@@ -19,7 +19,7 @@ public:
 	char *strdup(const char *string);
 	void deallocate_all();
 	size_t memory_used() const;
-	bool contain(uint32 addr);
+	bool contain(uintptr_t addr);
 	char *find_pattern(char *pattern, size_t len);
 
 	template<typename T>
@@ -45,5 +45,5 @@ private:
 
 bool  mem_compare(const char *addr, const char *pattern, size_t len);
 char *mem_find_pattern(char *pos, int range, const char *pattern, size_t len);
-char *mem_find_ref(char *pos, char *end, char opcode, uint32 ref, bool relative);
+char *mem_find_ref(char *pos, char *end, char opcode, uintptr_t ref, bool relative);
 char *mem_find_string_push(char *addr, const char *string, size_t len);

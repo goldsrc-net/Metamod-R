@@ -37,10 +37,10 @@ size_t static_allocator::memory_used() const
 	return (m_pages.size() - 1) * Pagesize + m_used;
 }
 
-bool static_allocator::contain(uint32 addr)
+bool static_allocator::contain(uintptr_t addr)
 {
 	for (auto p : m_pages) {
-		if (uint32(p) <= addr && addr < uint32(p) + Pagesize)
+		if (uintptr_t(p) <= addr && addr < uintptr_t(p) + Pagesize)
 			return true;
 	}
 	return false;
@@ -89,7 +89,7 @@ char *mem_find_pattern(char *pos, int range, const char *pattern, size_t len)
 	return nullptr;
 }
 
-char *mem_find_ref(char *pos, char *end, char opcode, uint32 ref, bool relative)
+char *mem_find_ref(char *pos, char *end, char opcode, uintptr_t ref, bool relative)
 {
 	for (; pos < end; ++pos)
 	{
@@ -97,12 +97,14 @@ char *mem_find_ref(char *pos, char *end, char opcode, uint32 ref, bool relative)
 		{
 			if (relative)
 			{
-				if ((uint32)pos + 5 + *(uint32 *)(pos + 1) == ref)
+				if ((uintptr_t)pos + 5 + *(int32 *)(pos + 1) == ref)
 					return pos;
 			}
 			else
 			{
-				if (*(uint32 *)(pos + 1) == ref)
+				// push imm32 / mov reg,imm32 carry a 32-bit immediate; only
+				// match when the target pointer fits.
+				if (ref <= UINT32_MAX && *(uint32 *)(pos + 1) == (uint32)ref)
 					return pos;
 			}
 		}
@@ -114,5 +116,5 @@ char *mem_find_ref(char *pos, char *end, char opcode, uint32 ref, bool relative)
 char *mem_find_string_push(char *addr, const char *string, size_t len)
 {
 	char *ptr = mem_find_pattern(addr, len, string, Q_strlen(string) + 1);
-	return mem_find_ref(addr, addr + len - 5, '\x68', (uint32)ptr, false);
+	return mem_find_ref(addr, addr + len - 5, '\x68', (uintptr_t)ptr, false);
 }
