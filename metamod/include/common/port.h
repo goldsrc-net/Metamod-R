@@ -109,7 +109,9 @@
 	#if defined(OSX)
 		#define SO_ARCH_SUFFIX ".dylib"
 	#else
-		#if defined ( __x86_64__ )
+		#if defined(__aarch64__)
+			#define SO_ARCH_SUFFIX "_aarch64.so"
+		#elif defined(__x86_64__)
 			#define SO_ARCH_SUFFIX "_amd64.so"
 		#else
 			#define SO_ARCH_SUFFIX ".so"

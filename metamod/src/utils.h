@@ -37,4 +37,10 @@ char *full_gamedir_path(const char *path, char (&fullpath)[MAX_PATH]);
 bool mem_compare(const char* addr, const char* pattern, size_t len);
 void NORETURN Sys_Error(const char *error, ...);
 
-extern const char* g_platform_postfixes[4];
+#if defined(__aarch64__) || defined(__x86_64__)
+	#define PLATFORM_POSTFIXES_COUNT 1
+#else
+	#define PLATFORM_POSTFIXES_COUNT 4
+#endif
+
+extern const char* g_platform_postfixes[PLATFORM_POSTFIXES_COUNT];

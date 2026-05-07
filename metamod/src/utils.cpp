@@ -1,11 +1,21 @@
 #include "precompiled.h"
 
-const char* g_platform_postfixes[4] =
+// Filename suffixes the plugin/gamedll resolver tries when a bare name is
+// given in plugins.ini or as a console "load" argument. The arch-native
+// suffix is the only entry on 64-bit; 32-bit x86 also tries i486/i586/i686
+// for legacy plugins built before generic-i386 became the convention.
+const char* g_platform_postfixes[PLATFORM_POSTFIXES_COUNT] =
 {
+#if defined(__aarch64__)
+	"_aarch64.so",
+#elif defined(__x86_64__)
+	"_amd64.so",
+#else
 	"_i386.so",
 	"_i486.so",
 	"_i586.so",
 	"_i686.so",
+#endif
 };
 
 bool is_yes(const char* str)
