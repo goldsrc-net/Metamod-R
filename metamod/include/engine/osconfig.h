@@ -87,8 +87,10 @@
 #include <fstream>
 #include <iomanip>
 
-#include <smmintrin.h>
-#include <xmmintrin.h>
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
+	#include <smmintrin.h>
+	#include <xmmintrin.h>
+#endif
 
 
 #ifdef _WIN32 // WINDOWS
