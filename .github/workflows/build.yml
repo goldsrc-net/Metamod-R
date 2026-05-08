@@ -2,7 +2,7 @@ name: C/C++ CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, 64bit]
     paths-ignore:
       - '**.md'
       - '.github/**'
@@ -244,16 +244,108 @@ jobs:
           name: linux32
           path: publish/*
 
+  linux-amd64:
+    name: 'Linux amd64'
+    runs-on: ubuntu-24.04
+    container: debian:11-slim
+
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake git rsync ca-certificates \
+            g++ gcc
+
+      - name: Configure
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build (amd64)
+        run: |
+          rm -rf build64
+          cmake -B build64 -DBUILD_64BIT=ON -DCMAKE_BUILD_TYPE=Release
+          cmake --build build64 -j$(nproc)
+
+      - name: Move files
+        run: |
+          mkdir -p publish/addons/metamod
+          mv build64/metamod/metamod_amd64.so publish/addons/metamod/metamod_amd64.so
+
+      - name: Deploy artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux64
+          path: publish/*
+
+  linux-aarch64:
+    name: 'Linux aarch64'
+    # GitHub provides free ubuntu-24.04-arm runners for public repos. Native
+    # aarch64 build avoids QEMU and the glibc-version-locking dance the
+    # workstation cross-build needed.
+    runs-on: ubuntu-24.04-arm
+    container: debian:12-slim
+
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake git rsync ca-certificates \
+            g++ gcc
+
+      - name: Configure
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Build (aarch64)
+        run: |
+          rm -rf build_aarch64
+          # Native arm64 build; CMakeLists auto-detects via CMAKE_SYSTEM_PROCESSOR,
+          # no -DBUILD_64BIT needed.
+          cmake -B build_aarch64 -DCMAKE_BUILD_TYPE=Release
+          cmake --build build_aarch64 -j$(nproc)
+
+      - name: Move files
+        run: |
+          mkdir -p publish/addons/metamod
+          mv build_aarch64/metamod/metamod_aarch64.so publish/addons/metamod/metamod_aarch64.so
+
+      - name: Deploy artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linuxarm64
+          path: publish/*
+
   publish:
     name: 'Publish'
     runs-on: ubuntu-latest
-    needs: [windows, linux]
+    needs: [windows, linux, linux-amd64, linux-aarch64]
 
     steps:
-      - name: Deploying linux artifacts
+      - name: Deploying linux i386 artifacts
         uses: actions/download-artifact@v4
         with:
           name: linux32
+
+      - name: Deploying linux amd64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux64
+
+      - name: Deploying linux arm64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linuxarm64
 
       - name: Deploying windows artifacts
         uses: actions/download-artifact@v4
