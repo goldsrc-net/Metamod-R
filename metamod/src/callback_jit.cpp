@@ -50,6 +50,17 @@ size_t CJit::compile_callback(jitdata_t* jitdata)
 	if (jitdata->args_count > MAX_CALLBACK_ARGS)
 		return jitdata->pfn_original;
 
+	// Variadic forwarding through an AsmJit-emitted Compiler frame doesn't
+	// preserve the caller's tail of stack args (or x86_64/aarch64 register-save
+	// area). The static trampoline at g_meta_*_engfuncs.pfnX is a plain
+	// jmp through the slot we return here, so handing back the raw original
+	// turns the trampoline into a clean tail-call: the engine sees the
+	// caller's frame intact and varargs forward naturally. Plugin hooks for
+	// variadic engine funcs (e.g. pfnAlertMessage) are silently disabled
+	// in this path.
+	if (jitdata->has_varargs)
+		return jitdata->pfn_original;
+
 	CodeHolder code;
 	code.init(jit_runtime().environment(), jit_runtime().cpu_features());
 
