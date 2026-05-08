@@ -207,6 +207,7 @@ void compile_engfuncs_callbacks()
 		jitdata.pfn_offset = cd.offset;
 		jitdata.mm_hook_time = cd.mm_hook_time;
 		jitdata.mm_hook = cd.mm_hook;
+		jitdata.arg_types = cd.arg_types;
 
 #ifdef JIT_DEBUG
 		jitdata.name = cd.name;
