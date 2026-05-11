@@ -141,8 +141,7 @@ jobs:
           rcedit "${{ github.workspace }}\publish\addons\metamod\metamod_${suffix}.dll" --set-version-string ProductName "Metamod-R" --set-file-version "${{ steps.get_version.outputs.version }}" --set-product-version "${{ steps.get_version.outputs.version }}" --set-version-string FileDescription "Metamod-R is fully reworked fork of original Metamod-p by Jussi Kivilinna. Metamod allows running multiple mod-like plugin DLLs, to add functionality or change the behavior of the running HLDS game mod., Commit: $env:GITHUB_SHA" --set-version-string "Comments" "Commit: $env:GITHUB_SHA" --set-version-string CompanyName "ReHLDS Dev Team" --set-version-string LegalCopyright "Copyright 2025 ReHLDS DevTeam" --set-icon metamod/msvc/icon.ico
 
       - name: Import PFX and sign
-        # Skip when the signing secret isn't configured (e.g. on a fork).
-        if: ${{ github.event_name != 'pull_request' && secrets.KEY_PFX_B64 != '' }}
+        if: github.event_name != 'pull_request'
         env:
           KEY_PFX_PASS: ${{ secrets.KEY_PFX_PASS }}
         # https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md
