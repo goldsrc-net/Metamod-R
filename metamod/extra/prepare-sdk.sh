@@ -29,6 +29,15 @@ cp metamod/extra/plugins.ini "$PUB/addons/metamod/"
 #    The trailing `.` on the src copies *contents*, not the dir itself.
 mkdir -p "$PUB/example_plugin"
 cp -R metamod/extra/example/. "$PUB/example_plugin/"
+# Strip MSBuild output that may have landed in the source tree before
+# this step ran.  The windows job builds the main solution first, and
+# example_plugin.vcxproj is a member project — its compile/link output
+# goes to msvc/{Release,Debug,x64}/, none of which are part of
+# upstream's release-zip shape.
+rm -rf "$PUB/example_plugin/msvc/Release" \
+       "$PUB/example_plugin/msvc/Debug"   \
+       "$PUB/example_plugin/msvc/x64"     \
+       "$PUB/example_plugin/Release"
 
 # 4. Refresh example_plugin's bundled include/metamod/ headers from the
 #    just-staged SDK so the template builds against current API surface.
