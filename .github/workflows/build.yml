@@ -113,15 +113,23 @@ jobs:
         run: |
           choco install rcedit -y
 
+      - name: Prepare SDK
+        # Same cross-platform staging the Linux jobs use — sdk/, config.ini,
+        # plugins.ini, example_plugin/.  bash is on PATH via Git Bash on the
+        # windows-2025 runner.
+        shell: bash
+        run: bash metamod/extra/prepare-sdk.sh publish
+
       - name: Move files
         # MSBuild output layout: Win32 → msvc\Release\, x64 → msvc\x64\Release\.
         # The metamod.dll target name is the same in both — disambiguate
         # the deployed asset filename with an _i386 / _amd64 suffix to
         # match the Linux output convention.
+        #
+        # PDBs intentionally not staged — upstream Metamod-R doesn't ship
+        # debug symbols.
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path publish\debug | Out-Null
-          New-Item -ItemType Directory -Force -Path publish\addons\metamod | Out-Null
           if ('${{ matrix.platform }}' -eq 'x64') {
             $srcDir = "msvc\x64\${{ env.buildRelease }}"
             $suffix = "amd64"
@@ -130,9 +138,6 @@ jobs:
             $suffix = "i386"
           }
           Move-Item "$srcDir\metamod.dll" "publish\addons\metamod\metamod_${suffix}.dll"
-          if (Test-Path "$srcDir\metamod.pdb") {
-            Move-Item "$srcDir\metamod.pdb" "publish\debug\metamod_${suffix}.pdb"
-          }
 
       - name: Edit resources at windows binaries
         shell: pwsh
@@ -241,22 +246,7 @@ jobs:
           rm -rf build && cmake -DCMAKE_BUILD_TYPE=COMPAT_GLIBC -B build && cmake --build build -j8
 
       - name: Prepare SDK
-        run: |
-          mkdir -p publish/sdk
-          mkdir -p publish/addons/metamod
-          rsync -a \
-            --include=dllapi.h \
-            --include=engine_api.h \
-            --include=enginecallbacks.h \
-            --include=h_export.h \
-            --include=meta_api.h \
-            --include=mutil.h \
-            --include=plinfo.h \
-            --exclude='*' metamod/src/ publish/sdk
-          rsync metamod/extra/config.ini publish/addons/metamod
-          rsync metamod/extra/plugins.ini publish/addons/metamod
-          rsync -a metamod/extra/example/ publish/example_plugin
-          rsync -a publish/sdk/ publish/example_plugin/include/metamod
+        run: bash metamod/extra/prepare-sdk.sh publish
 
       - name: Move files
         run: |
@@ -312,10 +302,13 @@ jobs:
           cmake -B build64 -DBUILD_64BIT=ON -DCMAKE_BUILD_TYPE=Release
           cmake --build build64 -j$(nproc)
 
+      - name: Prepare SDK
+        run: bash metamod/extra/prepare-sdk.sh publish
+
       - name: Move files
         run: |
-          mkdir -p publish/addons/metamod
           mv build64/metamod/metamod_amd64.so publish/addons/metamod/metamod_amd64.so
+          mv metamod/version/appversion.h publish/appversion.h
 
       - name: Deploy artifacts
         uses: actions/upload-artifact@v4
@@ -356,10 +349,13 @@ jobs:
           cmake -B build_aarch64 -DCMAKE_BUILD_TYPE=Release
           cmake --build build_aarch64 -j$(nproc)
 
+      - name: Prepare SDK
+        run: bash metamod/extra/prepare-sdk.sh publish
+
       - name: Move files
         run: |
-          mkdir -p publish/addons/metamod
           mv build_aarch64/metamod/metamod_aarch64.so publish/addons/metamod/metamod_aarch64.so
+          mv metamod/version/appversion.h publish/appversion.h
 
       - name: Deploy artifacts
         uses: actions/upload-artifact@v4
