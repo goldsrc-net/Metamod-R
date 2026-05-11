@@ -1,0 +1,203 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="12.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{4E8BAF6A-8979-4E0B-8CAE-0BA120152721}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>asmjit</RootNamespace>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '14.0'">v140</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '15.0'">v141</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '16.0'">v142</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '14.0'">v140</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '15.0'">v141</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '16.0'">v142</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '14.0'">v140</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '15.0'">v141</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '16.0'">v142</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '14.0'">v140</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '15.0'">v141</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '16.0'">v142</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup />
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>Disabled</Optimization>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32;_DEBUG;_LIB;ASMJIT_STATIC;ASMJIT_NO_FOREIGN;ASMJIT_NO_AARCH64;ASMJIT_NO_TEXT;ASMJIT_NO_LOGGING;ASMJIT_NO_NATVIS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\extern\asmjit\</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <DisableSpecificWarnings>4458;4127;4324;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>Disabled</Optimization>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32;_DEBUG;_LIB;ASMJIT_STATIC;ASMJIT_NO_FOREIGN;ASMJIT_NO_AARCH64;ASMJIT_NO_TEXT;ASMJIT_NO_LOGGING;ASMJIT_NO_NATVIS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\extern\asmjit\</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <DisableSpecificWarnings>4458;4127;4324;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32;NDEBUG;_LIB;ASMJIT_STATIC;ASMJIT_NO_FOREIGN;ASMJIT_NO_AARCH64;ASMJIT_NO_TEXT;ASMJIT_NO_LOGGING;ASMJIT_NO_NATVIS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\extern\asmjit\</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <DisableSpecificWarnings>4458;4127;4324;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;WIN32;NDEBUG;_LIB;ASMJIT_STATIC;ASMJIT_NO_FOREIGN;ASMJIT_NO_AARCH64;ASMJIT_NO_TEXT;ASMJIT_NO_LOGGING;ASMJIT_NO_NATVIS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\extern\asmjit\</AdditionalIncludeDirectories>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <DisableSpecificWarnings>4458;4127;4324;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\archtraits.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\assembler.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\builder.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\codeholder.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\codewriter.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\compiler.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\constpool.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\cpuinfo.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\emithelper.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\emitter.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\emitterutils.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\environment.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\errorhandler.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\formatter.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\func.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\funcargscontext.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\globals.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\inst.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\instdb.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\jitallocator.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\jitruntime.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\logger.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\operand.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\osutils.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\ralocal.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\rapass.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\rastack.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\string.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\target.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\type.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\core\virtmem.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\support\arena.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\support\arenabitset.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\support\arenahash.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\support\arenalist.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\support\arenatree.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\support\arenavector.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\support\support.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\x86\x86assembler.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\x86\x86builder.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\x86\x86compiler.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\x86\x86emithelper.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\x86\x86formatter.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\x86\x86func.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\x86\x86instapi.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\x86\x86instdb.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\x86\x86operand.cpp" />
+    <ClCompile Include="..\..\extern\asmjit\asmjit\x86\x86rapass.cpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

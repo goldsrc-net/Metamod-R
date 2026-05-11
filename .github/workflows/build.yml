@@ -15,12 +15,21 @@ on:
 
 jobs:
   windows:
-    name: 'Windows'
+    name: 'Windows (${{ matrix.platform }})'
     runs-on: windows-2025
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Win32
+            artifact: win32
+          - platform: x64
+            artifact: win64
 
     env:
       solution: 'msvc/metamod.sln'
-      buildPlatform: 'Win32'
+      buildPlatform: ${{ matrix.platform }}
       buildRelease: 'Release'
 
     steps:
@@ -105,33 +114,51 @@ jobs:
           choco install rcedit -y
 
       - name: Move files
+        # MSBuild output layout: Win32 → msvc\Release\, x64 → msvc\x64\Release\.
+        # The metamod.dll target name is the same in both — disambiguate
+        # the deployed asset filename with an _i386 / _amd64 suffix to
+        # match the Linux output convention.
+        shell: pwsh
         run: |
-          mkdir publish\debug
-          mkdir publish\addons\metamod
-          move msvc\${{ env.buildRelease }}\metamod.dll publish\addons\metamod\metamod.dll
-          move msvc\${{ env.buildRelease }}\metamod.pdb publish\debug\metamod.pdb
+          New-Item -ItemType Directory -Force -Path publish\debug | Out-Null
+          New-Item -ItemType Directory -Force -Path publish\addons\metamod | Out-Null
+          if ('${{ matrix.platform }}' -eq 'x64') {
+            $srcDir = "msvc\x64\${{ env.buildRelease }}"
+            $suffix = "amd64"
+          } else {
+            $srcDir = "msvc\${{ env.buildRelease }}"
+            $suffix = "i386"
+          }
+          Move-Item "$srcDir\metamod.dll" "publish\addons\metamod\metamod_${suffix}.dll"
+          if (Test-Path "$srcDir\metamod.pdb") {
+            Move-Item "$srcDir\metamod.pdb" "publish\debug\metamod_${suffix}.pdb"
+          }
 
       - name: Edit resources at windows binaries
+        shell: pwsh
         run: |
-         rcedit ${{ github.workspace }}\publish\addons\metamod\metamod.dll --set-version-string ProductName "Metamod-R" --set-file-version "${{ steps.get_version.outputs.version }}" --set-product-version "${{ steps.get_version.outputs.version }}" --set-version-string FileDescription "Metamod-R is fully reworked fork of original Metamod-p by Jussi Kivilinna. Metamod allows running multiple mod-like plugin DLLs, to add functionality or change the behavior of the running HLDS game mod., Commit: $env:GITHUB_SHA" --set-version-string "Comments" "Commit: $env:GITHUB_SHA" --set-version-string CompanyName "ReHLDS Dev Team" --set-version-string LegalCopyright "Copyright 2025 ReHLDS DevTeam" --set-icon metamod/msvc/icon.ico
-        shell: "pwsh"
+          $suffix = if ('${{ matrix.platform }}' -eq 'x64') { 'amd64' } else { 'i386' }
+          rcedit "${{ github.workspace }}\publish\addons\metamod\metamod_${suffix}.dll" --set-version-string ProductName "Metamod-R" --set-file-version "${{ steps.get_version.outputs.version }}" --set-product-version "${{ steps.get_version.outputs.version }}" --set-version-string FileDescription "Metamod-R is fully reworked fork of original Metamod-p by Jussi Kivilinna. Metamod allows running multiple mod-like plugin DLLs, to add functionality or change the behavior of the running HLDS game mod., Commit: $env:GITHUB_SHA" --set-version-string "Comments" "Commit: $env:GITHUB_SHA" --set-version-string CompanyName "ReHLDS Dev Team" --set-version-string LegalCopyright "Copyright 2025 ReHLDS DevTeam" --set-icon metamod/msvc/icon.ico
 
       - name: Import PFX and sign
-        if: github.event_name != 'pull_request'
+        # Skip when the signing secret isn't configured (e.g. on a fork).
+        if: ${{ github.event_name != 'pull_request' && secrets.KEY_PFX_B64 != '' }}
         env:
           KEY_PFX_PASS: ${{ secrets.KEY_PFX_PASS }}
         # https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md
+        shell: pwsh
         run: |
-               $pfxBase64 = "${{ secrets.KEY_PFX_B64 }}"
-               [IO.File]::WriteAllBytes("${{ github.workspace }}\signing-cert.pfx", [Convert]::FromBase64String($pfxBase64))
-               certutil -f -p "${{ secrets.KEY_PFX_PASS }}" -importPFX "${{ github.workspace }}\signing-cert.pfx"
-               & 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x86\signtool.exe' sign /a /f "${{ github.workspace }}\signing-cert.pfx"  /p $env:KEY_PFX_PASS /d "Metamod-R" /du "https://rehlds.dev/" /tr "http://timestamp.digicert.com" /td sha256 /fd sha256 /v ${{ github.workspace }}\publish\addons\metamod\metamod.dll
-               Remove-Item -Recurse -Force "${{ github.workspace }}\signing-cert.pfx"
-        shell: "pwsh"
+          $suffix = if ('${{ matrix.platform }}' -eq 'x64') { 'amd64' } else { 'i386' }
+          $pfxBase64 = "${{ secrets.KEY_PFX_B64 }}"
+          [IO.File]::WriteAllBytes("${{ github.workspace }}\signing-cert.pfx", [Convert]::FromBase64String($pfxBase64))
+          certutil -f -p "${{ secrets.KEY_PFX_PASS }}" -importPFX "${{ github.workspace }}\signing-cert.pfx"
+          & 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x86\signtool.exe' sign /a /f "${{ github.workspace }}\signing-cert.pfx"  /p $env:KEY_PFX_PASS /d "Metamod-R" /du "https://rehlds.dev/" /tr "http://timestamp.digicert.com" /td sha256 /fd sha256 /v "${{ github.workspace }}\publish\addons\metamod\metamod_${suffix}.dll"
+          Remove-Item -Recurse -Force "${{ github.workspace }}\signing-cert.pfx"
+
       - name: Deploy artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: win32
+          name: ${{ matrix.artifact }}
           path: publish/*
 
   linux:
@@ -140,12 +167,11 @@ jobs:
     container: debian:11-slim
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: recursive
-
+      # Install git + a current cmake BEFORE checkout. Without git the
+      # checkout action falls back to the REST-API download path which
+      # can't honour `submodules: recursive`, and debian:11's stock cmake
+      # 3.18 is below AsmJit's minimum (3.24). Pip 20 on debian:11
+      # predates PEP 668 enforcement so a plain `pip3 install` works.
       - name: Install dependencies
         run: |
           dpkg --add-architecture i386
@@ -154,8 +180,18 @@ jobs:
             gcc-multilib g++-multilib \
             build-essential \
             libc6-dev libc6-dev-i386 \
-            git cmake rsync \
+            git rsync python3-pip ca-certificates \
             g++ gcc
+          pip3 install 'cmake>=3.24'
+
+      - name: Configure
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
 
 
       - name: GPG Import
@@ -253,11 +289,14 @@ jobs:
 
     steps:
       - name: Install dependencies
+        # debian:11 stock cmake (3.18) is below AsmJit's required 3.24;
+        # pull a current cmake from pip alongside the rest.
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential cmake git rsync ca-certificates \
+            build-essential git rsync ca-certificates python3-pip \
             g++ gcc
+          pip3 install 'cmake>=3.24'
 
       - name: Configure
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -350,10 +389,15 @@ jobs:
         with:
           name: linuxarm64
 
-      - name: Deploying windows artifacts
+      - name: Deploying windows Win32 artifacts
         uses: actions/download-artifact@v4
         with:
           name: win32
+
+      - name: Deploying windows Win64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: win64
 
       - name: Reading appversion.h
         run: |
