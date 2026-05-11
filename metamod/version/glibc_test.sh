@@ -4,10 +4,16 @@ main()
 {
 	files=($@)
 
+	# Thresholds bumped to match the goldsrc-net buildchain's glibc
+	# 2.36 deployment floor (debian:12 SBC). The original 2.11 / 3.4.15
+	# / 1.3.5 set was aimed at very old hosts that the 64bit-branch
+	# work doesn't try to support. Loose ceilings give CI room without
+	# silently allowing brand-new symbols (still catches a runaway
+	# bleeding-edge stdlib pickup).
 	declare -A threshold_version
-	threshold_version[CXXABI]="1.3.5"
-	threshold_version[GLIBCXX]="3.4.15"
-	threshold_version[GLIBC]="2.11"
+	threshold_version[CXXABI]="1.3.14"
+	threshold_version[GLIBCXX]="3.4.30"
+	threshold_version[GLIBC]="2.36"
 
 	for k in "${!threshold_version[@]}"; do
 		for f in "${files[@]}"
