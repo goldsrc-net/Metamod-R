@@ -87,8 +87,29 @@
 #include <fstream>
 #include <iomanip>
 
-#include <smmintrin.h>
-#include <xmmintrin.h>
+#if defined(__aarch64__) || defined(_M_ARM64)
+	// sse2neon.h provides the _mm_*/_m128 intrinsic surface on aarch64
+	// by translating each call into the matching NEON instruction, so
+	// plugins can use SSE intrinsics on every arch without #ifdefs.
+	//
+	// Compiler/toolchain requirements when cross-compiling for aarch64:
+	//   - Use clang, not gcc.  sse2neon.h needs __has_builtin and
+	//     vld1q_u8_x4, which require gcc >= 10 (or any clang).  Debian
+	//     buster's cross-gcc is 8.3 and rejects the header.
+	//   - Pass `--target=aarch64-linux-gnu` so clang emits aarch64.
+	//   - Pass `-isystem` paths to debian's cross-libstdc++ so clang
+	//     can find <bits/c++config.h>:
+	//       -isystem /usr/aarch64-linux-gnu/include/c++/8/aarch64-linux-gnu
+	//       -isystem /usr/aarch64-linux-gnu/include/c++/8
+	//       -isystem /usr/aarch64-linux-gnu/include
+	//     (clang's --target alone doesn't auto-add debian's cross
+	//     package paths the way the gcc cross-driver does.)
+	#include "sse2neon.h"
+	#define __rdtsc _rdtsc  // sse2neon uses the MSVC spelling; alias for GCC code.
+#else
+	#include <smmintrin.h>
+	#include <xmmintrin.h>
+#endif
 
 
 #ifdef _WIN32 // WINDOWS
