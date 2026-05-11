@@ -76,7 +76,9 @@ jobs:
       # the action falls back to the REST-API download path which can't
       # honour `submodules: recursive`, and debian:11's stock cmake 3.18
       # is below AsmJit's minimum (3.24). pip3's cmake wheel is the
-      # smallest way to get a current cmake on this image.
+      # smallest way to get a current cmake on this image. Note: pip 20
+      # on debian:11 predates `--break-system-packages` so we don't pass
+      # that flag — the system here isn't externally-managed.
       - name: Install dependencies
         run: |
           dpkg --add-architecture i386
@@ -87,7 +89,7 @@ jobs:
             libc6-dev libc6-dev-i386 \
             git rsync python3-pip ca-certificates \
             g++ gcc
-          pip3 install --break-system-packages 'cmake>=3.24'
+          pip3 install 'cmake>=3.24'
 
       - name: Configure
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -202,7 +204,7 @@ jobs:
           apt-get install -y --no-install-recommends \
             build-essential git rsync ca-certificates python3-pip \
             g++ gcc
-          pip3 install --break-system-packages 'cmake>=3.24'
+          pip3 install 'cmake>=3.24'
 
       - name: Configure
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
