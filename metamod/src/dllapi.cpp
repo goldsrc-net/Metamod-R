@@ -260,6 +260,7 @@ void compile_dllfunc_callbacks()
 		jitdata.args_count = cd.args_count;
 		jitdata.rettype = cd.rettype;
 		jitdata.has_varargs = cd.has_varargs;
+		jitdata.va_formatted = false;
 		jitdata.pfn_offset = cd.offset;
 		jitdata.mm_hook_time = cd.mm_hook_time;
 		jitdata.mm_hook = cd.mm_hook;
@@ -285,6 +286,7 @@ void compile_newdllfunc_callbacks()
 		jitdata.args_count = cd.args_count;
 		jitdata.rettype = cd.rettype;
 		jitdata.has_varargs = cd.has_varargs;
+		jitdata.va_formatted = false;
 		jitdata.pfn_offset = cd.offset;
 		jitdata.mm_hook_time = cd.mm_hook_time;
 		jitdata.mm_hook = cd.mm_hook;

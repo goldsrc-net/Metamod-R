@@ -32,6 +32,9 @@ struct jitdata_t
 	uint8			args_count;
 	rettype_t		rettype;
 	bool			has_varargs;
+	// The callback for a variadic function, called with its varargs already formatted: the last
+	// two args are "%s" and the text. It passes them on as (..., "%s", text), the text variadic.
+	bool			va_formatted;
 	uint8			mm_hook_time;
 	size_t			mm_hook;
 	arg_types_array_t	arg_types;
@@ -166,6 +169,9 @@ public:
 
 private:
 	static bool is_hook_needed(jitdata_t* jitdata);
+
+	size_t compile_fixed_callback(jitdata_t* jitdata);
+	size_t compile_va_callback(jitdata_t* jitdata);
 
 	void register_call_site(uintptr_t retaddr, uintptr_t handler_slot);
 

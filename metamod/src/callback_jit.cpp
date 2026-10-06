@@ -4,6 +4,9 @@
 
 #include <asmjit/core.h>
 
+#include <cstdarg>
+#include <cstdio>
+
 CJit g_jit;
 
 namespace {
@@ -42,23 +45,88 @@ void CJit::register_call_site(uintptr_t retaddr, uintptr_t handler_slot)
 	m_handler_to_retaddr.emplace(handler_slot, retaddr);
 }
 
+// Variadic engine functions (pfnClientCommand, pfnAlertMessage, pfnEngineFprintf, all
+// void (x, const char *fmt, ...)) are formatted before plugins see them, as the original
+// i386 JIT did: plugins and the engine get (x, "%s", text). An AsmJit-emitted frame cannot
+// forward the caller's varargs (the stack tail, or the x86_64/aarch64 register save area), so
+// the formatting is done by a static C++ entry per function, which then calls a fixed-argument
+// callback compiled for it.
+namespace {
+
+constexpr size_t MAX_VA_FUNCS = 4;
+
+struct va_func_t
+{
+	size_t	table_offset;
+	size_t	pfn_offset;
+	size_t	callback;	// the compiled fixed-argument callback
+};
+
+va_func_t g_va_funcs[MAX_VA_FUNCS];
+size_t g_va_funcs_count;
+
+template<size_t N>
+void va_entry(void *arg, const char *fmt, ...)
+{
+	char text[MAX_STRBUF_LEN];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(text, sizeof(text), fmt, ap);
+	va_end(ap);
+
+	reinterpret_cast<void (*)(void *, const char *, const char *)>(g_va_funcs[N].callback)(arg, "%s", text);
+}
+
+const size_t g_va_entries[MAX_VA_FUNCS] = {
+	size_t(&va_entry<0>), size_t(&va_entry<1>), size_t(&va_entry<2>), size_t(&va_entry<3>)
+};
+
+}	// namespace
+
 size_t CJit::compile_callback(jitdata_t* jitdata)
 {
 	if (!is_hook_needed(jitdata))
 		return jitdata->pfn_original;
 
-	if (jitdata->args_count > MAX_CALLBACK_ARGS)
+	if (jitdata->has_varargs)
+		return compile_va_callback(jitdata);
+
+	return compile_fixed_callback(jitdata);
+}
+
+size_t CJit::compile_va_callback(jitdata_t* jitdata)
+{
+	// Only void (x, const char *fmt, ...) is handled by va_entry.
+	if (jitdata->rettype != rt_void || jitdata->args_count != 2)
 		return jitdata->pfn_original;
 
-	// Variadic forwarding through an AsmJit-emitted Compiler frame doesn't
-	// preserve the caller's tail of stack args (or x86_64/aarch64 register-save
-	// area). The static trampoline at g_meta_*_engfuncs.pfnX is a plain
-	// jmp through the slot we return here, so handing back the raw original
-	// turns the trampoline into a clean tail-call: the engine sees the
-	// caller's frame intact and varargs forward naturally. Plugin hooks for
-	// variadic engine funcs (e.g. pfnAlertMessage) are silently disabled
-	// in this path.
-	if (jitdata->has_varargs)
+	size_t i = 0;
+	while (i < g_va_funcs_count && (g_va_funcs[i].table_offset != jitdata->table_offset
+		|| g_va_funcs[i].pfn_offset != jitdata->pfn_offset))
+		++i;
+	if (i == g_va_funcs_count) {
+		if (g_va_funcs_count == MAX_VA_FUNCS)
+			return jitdata->pfn_original;
+		g_va_funcs[i] = { jitdata->table_offset, jitdata->pfn_offset, 0 };
+		++g_va_funcs_count;
+	}
+
+	jitdata_t fixed = *jitdata;
+	fixed.has_varargs = false;
+	fixed.va_formatted = true;
+	fixed.arg_types.types[fixed.args_count++] = at_int;	// the text
+
+	size_t callback = compile_fixed_callback(&fixed);
+	if (callback == fixed.pfn_original)
+		return jitdata->pfn_original;
+
+	g_va_funcs[i].callback = callback;
+	return g_va_entries[i];
+}
+
+size_t CJit::compile_fixed_callback(jitdata_t* jitdata)
+{
+	if (jitdata->args_count > MAX_CALLBACK_ARGS)
 		return jitdata->pfn_original;
 
 	CodeHolder code;

@@ -44,6 +44,18 @@ FuncSignature engine_signature(const jitdata_t& jd)
 		sig.add_arg(arg_type_id(jd.arg_types.types[i]));
 	if (jd.has_varargs)
 		sig.set_va_index(uint32_t(jd.args_count));
+	else if (jd.va_formatted)
+		sig.set_va_index(uint32_t(jd.args_count - 1));	// the formatted text
+	return sig;
+}
+
+// The signature the callback itself is entered with: a va_formatted callback takes all of its
+// args as fixed ones.
+FuncSignature entry_signature(const jitdata_t& jd)
+{
+	FuncSignature sig = engine_signature(jd);
+	if (jd.va_formatted)
+		sig.set_va_index(FuncSignature::kNoVarArgs);
 	return sig;
 }
 
@@ -364,7 +376,7 @@ emit_result_t emit_callback(IEmitter& em, const jitdata_t& jd)
 {
 	emit_result_t result;
 
-	FuncSignature entry_sig = engine_signature(jd);
+	FuncSignature entry_sig = entry_signature(jd);
 	FuncNode* func = em.add_func(entry_sig);
 
 	std::vector<Reg> arg_regs;
