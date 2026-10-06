@@ -179,6 +179,8 @@ jobs:
       - name: Install dependencies
         run: |
           dpkg --add-architecture i386
+          # Debian 11 LTS ended; bullseye-security now lives only on archive.debian.org
+          sed -i 's|http://deb.debian.org/debian-security|http://archive.debian.org/debian-security|' /etc/apt/sources.list
           apt-get update
           apt-get install -y \
             gcc-multilib g++-multilib \
@@ -281,6 +283,8 @@ jobs:
         # debian:11 stock cmake (3.18) is below AsmJit's required 3.24;
         # pull a current cmake from pip alongside the rest.
         run: |
+          # Debian 11 LTS ended; bullseye-security now lives only on archive.debian.org
+          sed -i 's|http://deb.debian.org/debian-security|http://archive.debian.org/debian-security|' /etc/apt/sources.list
           apt-get update
           apt-get install -y --no-install-recommends \
             build-essential git rsync ca-certificates python3-pip \
