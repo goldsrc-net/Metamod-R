@@ -1,6 +1,6 @@
 #pragma once
 
-#include <unordered_map>
+#include <map>
 
 constexpr size_t MAX_CALLBACK_ARGS = 16;
 
@@ -178,8 +178,10 @@ private:
 	static_allocator	m_callback_allocator;
 	static_allocator	m_tramp_allocator;
 
-	std::unordered_map<uintptr_t, uintptr_t>	m_retaddr_to_handler;
-	std::unordered_map<uintptr_t, uintptr_t>	m_handler_to_retaddr;
+	// std::map, not unordered_map: its rehash policy needs GLIBCXX_3.4.18, newer than the
+	// libstdc++ HLDS ships.
+	std::map<uintptr_t, uintptr_t>	m_retaddr_to_handler;
+	std::map<uintptr_t, uintptr_t>	m_handler_to_retaddr;
 };
 
 extern CJit g_jit;
