@@ -335,14 +335,17 @@ void emit_orchestration(IEmitter& em, const jitdata_t& jd,
 		result.sites.push_back({after_call, jd.mm_hook});
 	}
 
-	// Restore g_metaGlobals from backup.
-	for (size_t off = 0; off < mg_size; off += sizeof(intptr_t)) {
-		Reg tmp = em.new_gp_ptr();
-		em.load_word(tmp, em.stack_at(locals_base, int32_t(off)));
-		em.store_word(em.ptr(globals, int32_t(off)), tmp);
-	}
-
-	// Final return value: status >= MRES_OVERRIDE picks over_ret, else orig_ret.
+	// Final return value: this call's status >= MRES_OVERRIDE picks over_ret, else orig_ret. It is
+	// read before g_metaGlobals is restored: after the restore, status is the caller's, and a call
+	// made from inside a superseded one would return its uninitialised over_ret.
+	auto emit_restore = [&]() {
+		// Restore g_metaGlobals from backup.
+		for (size_t off = 0; off < mg_size; off += sizeof(intptr_t)) {
+			Reg tmp = em.new_gp_ptr();
+			em.load_word(tmp, em.stack_at(locals_base, int32_t(off)));
+			em.store_word(em.ptr(globals, int32_t(off)), tmp);
+		}
+	};
 	if (jd.rettype == rt_integer) {
 		Reg ret = em.new_gp_ptr();
 		em.load_word(ret, orig_ret_mem);
@@ -353,6 +356,7 @@ void emit_orchestration(IEmitter& em, const jitdata_t& jd,
 		em.branch_below_unsigned(done);
 		em.load_word(ret, over_ret_mem);
 		em.bind_label(done);
+		emit_restore();
 		em.ret_gp(ret);
 	} else if (jd.rettype == rt_float) {
 		Reg ret = em.new_vec_f32();
@@ -364,8 +368,10 @@ void emit_orchestration(IEmitter& em, const jitdata_t& jd,
 		em.branch_below_unsigned(done);
 		em.load_float(ret, over_ret_mem);
 		em.bind_label(done);
+		emit_restore();
 		em.ret_vec(ret);
 	} else {
+		emit_restore();
 		em.ret_void();
 	}
 }
